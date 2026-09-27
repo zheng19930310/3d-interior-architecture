@@ -1,0 +1,1579 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#e9e5df">
+<title>极简客厅 · 3D 效果图</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;overflow:hidden;background:#e9e5df;position:fixed;inset:0;width:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;color:#22201d}
+  /* canvas 必须由 CSS 明确定尺寸：setSize(w,h,false) 不写 style，
+     而 canvas 是替换元素，width:auto 会回退到内在尺寸(=视口×DPR)，导致画面被放大偏移 */
+  #gl{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+
+  .hud{position:fixed;left:0;right:0;display:flex;gap:8px;padding:12px 14px;z-index:5;pointer-events:none}
+  .hud.top{top:0;align-items:flex-start;justify-content:space-between;
+    background:linear-gradient(180deg,rgba(238,234,228,.92),rgba(238,234,228,0))}
+  .hud.bot{bottom:0;flex-direction:column;padding-bottom:calc(12px + env(safe-area-inset-bottom));
+    background:linear-gradient(0deg,rgba(238,234,228,.94),rgba(238,234,228,0))}
+
+  .title{font-size:15px;font-weight:650;letter-spacing:.3px;line-height:1.35}
+  .title small{display:block;font-size:11px;font-weight:400;opacity:.6;letter-spacing:.4px}
+  .btns{display:flex;flex-wrap:wrap;gap:6px;pointer-events:auto;justify-content:flex-end;max-width:66%}
+  .btn{border:1px solid rgba(34,32,29,.16);background:rgba(255,255,255,.7);backdrop-filter:blur(8px);
+    border-radius:999px;padding:7px 12px;font-size:12px;line-height:1;cursor:pointer;white-space:nowrap;
+    transition:.18s;font-family:inherit;color:#22201d}
+  .btn:active{transform:scale(.96)}
+  .btn.on{background:#22201d;color:#f3efe9;border-color:#22201d}
+  @media (max-width:430px){ .btn{padding:6px 9px;font-size:11px} .title{font-size:13px} }
+
+  #chips{display:flex;gap:7px;overflow-x:auto;pointer-events:auto;padding:2px 0 8px;
+    scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  #chips::-webkit-scrollbar{display:none}
+  .chip{flex:0 0 auto;border:1px solid rgba(34,32,29,.14);background:rgba(255,255,255,.62);
+    border-radius:999px;padding:6px 11px;font-size:11.5px;cursor:pointer;white-space:nowrap;transition:.18s}
+  .chip.on{background:#22201d;color:#f3efe9;border-color:#22201d}
+
+  #card{position:fixed;left:14px;bottom:calc(64px + env(safe-area-inset-bottom));max-width:270px;z-index:6;
+    background:rgba(252,251,249,.9);backdrop-filter:blur(14px);border:1px solid rgba(34,32,29,.1);
+    border-radius:14px;padding:12px 14px;box-shadow:0 10px 30px rgba(40,34,26,.14);
+    opacity:0;transform:translateY(8px) scale(.98);pointer-events:none;transition:.24s cubic-bezier(.2,.8,.3,1)}
+  #card.show{opacity:1;transform:none;pointer-events:auto}
+  #card .k{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;opacity:.45}
+  #card .n{font-size:17px;font-weight:660;margin:3px 0 5px}
+  #card .d{font-size:12px;line-height:1.6;opacity:.72}
+  #card .row{display:flex;gap:6px;margin-top:9px}
+  #card .mini{border:1px solid rgba(34,32,29,.16);border-radius:8px;padding:5px 9px;font-size:11px;
+    background:transparent;cursor:pointer;font-family:inherit;color:#22201d}
+  #card .act{font-size:11px;letter-spacing:.4px;margin-top:8px;min-height:14px;color:#4b7a45;opacity:0;
+    transition:opacity .25s}
+  #card .act.show{opacity:1}
+
+  #dot{position:fixed;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;z-index:4;
+    background:#2f6bff;box-shadow:0 0 0 4px rgba(47,107,255,.22);opacity:0;transition:opacity .2s;pointer-events:none}
+  #dot.show{opacity:1;animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 4px rgba(47,107,255,.22)}50%{box-shadow:0 0 0 9px rgba(47,107,255,.08)}}
+
+  #tip{position:fixed;left:50%;bottom:calc(112px + env(safe-area-inset-bottom));transform:translateX(-50%);
+    font-size:11.5px;opacity:.5;z-index:5;pointer-events:none;max-width:86vw;text-align:center;line-height:1.5;
+    transition:opacity .5s}
+
+  #load{position:fixed;inset:0;z-index:20;display:grid;place-items:center;background:#e9e5df;transition:opacity .6s}
+  #load.gone{opacity:0;pointer-events:none}
+  #load .l{text-align:center}
+  #load .b{width:150px;height:2px;background:rgba(34,32,29,.12);border-radius:2px;overflow:hidden;margin:12px auto 0}
+  #load .b i{display:block;height:100%;width:35%;background:#22201d;border-radius:2px;animation:slide 1.1s infinite}
+  @keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(430%)}}
+  #load p{font-size:12px;letter-spacing:2px;opacity:.55}
+  @media (max-width:420px){#card{left:10px;right:10px;max-width:none}}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<div class="hud top">
+  <div class="title">极简暖调客厅 · 3D 方案<small id="sub">WARM MINIMAL LIVING ROOM — 全屋俯瞰</small></div>
+  <div class="btns">
+    <button class="btn" id="bDay">日光</button>
+    <button class="btn" id="bSpin">自转</button>
+    <button class="btn" id="bReset">复位</button>
+  </div>
+</div>
+
+<div id="dot"></div>
+
+<div id="card">
+  <div class="k" id="cardK">SELECTED</div>
+  <div class="n" id="cardN">—</div>
+  <div class="d" id="cardD">—</div>
+  <div class="row">
+    <button class="mini" id="cardFocus">聚焦此物</button>
+    <button class="mini" id="cardClose">关闭</button>
+  </div>
+  <div class="act" id="cardAct"></div>
+</div>
+
+<div class="hud bot">
+  <div id="chips"></div>
+</div>
+<div id="tip">单指拖拽平移 · 双指捏合缩放 · 双指拖动旋转 · 点击进入房间/家具 · 双击灯/电视可开关</div>
+
+<div id="load"><div class="l"><p>BUILDING SCENE</p><div class="b"><i></i></div></div></div>
+
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+/* ---------- 基础 ---------- */
+const canvas = document.getElementById('gl');
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:false });
+} catch(e) {
+  document.getElementById('load').innerHTML =
+    '<div class="l"><p style="letter-spacing:1px">当前浏览器未启用 WebGL</p>' +
+    '<p style="margin-top:8px;letter-spacing:0">请在设置中开启硬件加速后重试</p></div>';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+// 以画布实际布局尺寸为准（手机地址栏伸缩时 innerHeight 与可视区常不一致）
+let VW = innerWidth, VH = innerHeight, RLEFT = 0, RTOP = 0;
+function measure(){
+  const r = canvas.getBoundingClientRect();
+  // 布局尺寸异常时退回 visual viewport，避免 0 尺寸导致画面畸变
+  VW = r.width  > 8 ? r.width  : (window.visualViewport?.width  || innerWidth);
+  VH = r.height > 8 ? r.height : (window.visualViewport?.height || innerHeight);
+  RLEFT = r.left; RTOP = r.top;
+}
+measure();
+renderer.setSize(VW, VH, false);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.02;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xe9e5df);
+scene.fog = new THREE.Fog(0xe9e5df, 300, 1600);
+
+const camera = new THREE.PerspectiveCamera(48, VW/VH, 0.1, 900);
+camera.position.set(11, 8, 13);
+
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.target.set(0, 1.0, -0.3);
+controls.minDistance = 0.6;
+controls.maxDistance = 320;
+controls.zoomSpeed = 1.1;
+controls.panSpeed = 1.2;
+controls.screenSpacePanning = true;
+controls.touches.ONE = THREE.TOUCH.PAN;          // 单指按住 → 拖拽平移
+controls.touches.TWO = THREE.TOUCH.DOLLY_ROTATE; // 双指捏合 → 缩放；双指拖动 → 旋转
+controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+controls.maxPolarAngle = Math.PI * 0.497;
+controls.autoRotateSpeed = 0.55;
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+/* ---------- 程序化贴图 ---------- */
+function cv(w,h){ const c=document.createElement('canvas'); c.width=w; c.height=h; return [c, c.getContext('2d')]; }
+function T(c, rx=1, ry=1){
+  const t=new THREE.CanvasTexture(c);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(rx,ry);
+  t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return t;
+}
+function noise(ctx,w,h,a,step=1){
+  for(let i=0;i<w*h*0.25;i++){
+    ctx.fillStyle=`rgba(${Math.random()<.5?0:255},${Math.random()<.5?0:255},${Math.random()<.5?0:255},${a})`;
+    ctx.fillRect(Math.random()*w|0, Math.random()*h|0, step, step);
+  }
+}
+// 橡木地板
+function woodTex(){
+  const [c,x]=cv(1024,1024), planks=7, ph=1024/planks;
+  x.fillStyle='#c9a578'; x.fillRect(0,0,1024,1024);
+  for(let p=0;p<planks;p++){
+    const y0=p*ph, tone=(Math.random()*14-7)|0;
+    x.fillStyle=`rgb(${201+tone},${164+tone},${119+tone})`; x.fillRect(0,y0,1024,ph);
+    for(let g=0;g<70;g++){ // 木纹
+      const gy=y0+Math.random()*ph, amp=Math.random()*4+1, w=1.6+Math.random()*1.4;
+      x.strokeStyle=`rgba(${130+Math.random()*40|0},${92+Math.random()*30|0},${58+Math.random()*24|0},${.05+Math.random()*.09})`;
+      x.lineWidth=w; x.beginPath(); x.moveTo(0,gy);
+      for(let sx=0;sx<=1024;sx+=32) x.lineTo(sx, gy+Math.sin(sx*0.007+g)*amp);
+      x.stroke();
+    }
+    x.fillStyle='rgba(90,62,40,.30)'; x.fillRect(0,y0+ph-2,1024,2); // 板缝
+    for(let s=0;s<3;s++){ const sx=Math.random()*1024|0; x.fillStyle='rgba(90,62,40,.22)'; x.fillRect(sx,y0,2,ph); }
+  }
+  noise(x,1024,1024,.03,2);
+  return c;
+}
+// 墙面微肌理
+function plasterTex(){
+  const [c,x]=cv(512,512);
+  x.fillStyle='#efece7'; x.fillRect(0,0,512,512);
+  noise(x,512,512,.022,1);
+  return c;
+}
+// 地毯织纹
+function rugTex(){
+  const [c,x]=cv(512,512);
+  x.fillStyle='#b7b0a5'; x.fillRect(0,0,512,512);
+  for(let i=0;i<512;i+=3){ x.fillStyle=`rgba(255,255,255,${.05+Math.random()*.05})`; x.fillRect(0,i,512,1); x.fillRect(i,0,1,512); }
+  noise(x,512,512,.06,1);
+  return c;
+}
+// 藤编
+function caneTex(){
+  const [c,x]=cv(256,256);
+  x.fillStyle='#d8b47e'; x.fillRect(0,0,256,256);
+  const s=32;
+  for(let i=0;i<8;i++)for(let j=0;j<8;j++){
+    const over=(i+j)%2===0;
+    x.fillStyle=over?'#e6c695':'#c39a64';
+    x.fillRect(i*s+2,j*s+2,s-4,s-4);
+    x.strokeStyle='rgba(120,84,44,.35)'; x.lineWidth=1.5;
+    x.strokeRect(i*s+2,j*s+2,s-4,s-4);
+  }
+  noise(x,256,256,.05,1);
+  return c;
+}
+// 条纹（粉/砖红）
+function stripeTex(){
+  const [c,x]=cv(64,256);
+  const bands=[['#e7b8b3',0],['#c4685c',14],['#e7b8b3',26],['#b8564a',40],['#d99f97',54]];
+  x.fillStyle='#e0aca6'; x.fillRect(0,0,64,256);
+  for(let y=0;y<256;y+=64){
+    let off=0;
+    for(const [col,h] of bands){ x.fillStyle=col; x.fillRect(0,y+off,64,h); off+=h; }
+    x.fillStyle='rgba(90,30,25,.16)'; x.fillRect(0,y+63,64,1.5);
+  }
+  return c;
+}
+// 百叶帘
+function blindTex(){
+  const [c,x]=cv(64,64);
+  const g=x.createLinearGradient(0,0,0,64);
+  g.addColorStop(0,'rgba(240,220,190,1)'); g.addColorStop(.5,'rgba(226,201,164,1)');
+  g.addColorStop(.56,'rgba(158,120,80,.95)'); g.addColorStop(1,'rgba(206,178,140,1)');
+  x.fillStyle=g; x.fillRect(0,0,64,64);
+  return c;
+}
+// 窗外天光
+function skyTex(){
+  const [c,x]=cv(32,256);
+  const g=x.createLinearGradient(0,0,0,256);
+  g.addColorStop(0,'#dfe7ea'); g.addColorStop(.45,'#f0eeea'); g.addColorStop(1,'#e6e0d6');
+  x.fillStyle=g; x.fillRect(0,0,32,256);
+  return c;
+}
+// 混凝土
+function concreteTex(){
+  const [c,x]=cv(512,512);
+  x.fillStyle='#9b9791'; x.fillRect(0,0,512,512);
+  for(let i=0;i<40;i++){ const r=40+Math.random()*120;
+    const g=x.createRadialGradient(Math.random()*512,Math.random()*512,0,Math.random()*512,Math.random()*512,r);
+    g.addColorStop(0,`rgba(${Math.random()<.5?255:60},${Math.random()<.5?255:60},${Math.random()<.5?255:60},.04)`);
+    g.addColorStop(1,'rgba(0,0,0,0)'); x.fillStyle=g; x.fillRect(0,0,512,512);
+  }
+  noise(x,512,512,.05,1);
+  return c;
+}
+/* ---- 真实感增强：凹凸 / 粗糙度 / 织物 / 石材 / 瓷砖 ---- */
+// 木地板凹凸（与 woodTex 同一套板缝与纹理走向）
+function woodBumpTex(){
+  const [c,x]=cv(1024,1024), planks=7, ph=1024/planks;
+  x.fillStyle='#808080'; x.fillRect(0,0,1024,1024);
+  for(let p=0;p<planks;p++){
+    const y0=p*ph;
+    for(let g=0;g<60;g++){
+      const gy=y0+Math.random()*ph, amp=Math.random()*4+1;
+      x.strokeStyle=`rgba(${Math.random()<.5?40:215},${Math.random()<.5?40:215},${Math.random()<.5?40:215},.10)`;
+      x.lineWidth=1.2+Math.random()*1.4; x.beginPath(); x.moveTo(0,gy);
+      for(let sx=0;sx<=1024;sx+=32) x.lineTo(sx, gy+Math.sin(sx*0.007+g)*amp);
+      x.stroke();
+    }
+    x.fillStyle='#1c1c1c'; x.fillRect(0,y0+ph-2,1024,2.5);
+    for(let s=0;s<3;s++){ const sx=Math.random()*1024|0; x.fillStyle='#2a2a2a'; x.fillRect(sx,y0,2,ph); }
+  }
+  return c;
+}
+// 亚麻织物：经纬交织 + 不规则纤维
+function linenTex(){
+  const [c,x]=cv(256,256);
+  x.fillStyle='#e9e3d8'; x.fillRect(0,0,256,256);
+  for(let i=0;i<256;i+=2){
+    x.fillStyle=`rgba(255,255,255,${.10+Math.random()*.08})`; x.fillRect(0,i,256,1);
+    x.fillStyle=`rgba(120,108,92,${.07+Math.random()*.06})`; x.fillRect(i,0,1,256);
+  }
+  for(let i=0;i<900;i++){
+    x.fillStyle=`rgba(${190+Math.random()*60|0},${180+Math.random()*55|0},${160+Math.random()*50|0},.16)`;
+    x.fillRect(Math.random()*256|0, Math.random()*256|0, 2+Math.random()*4|0, 1);
+  }
+  noise(x,256,256,.05,1);
+  return c;
+}
+// 织物凹凸（与 linenTex 同结构，用于 bumpMap）
+function linenBump(){
+  const [c,x]=cv(256,256);
+  x.fillStyle='#7a7a7a'; x.fillRect(0,0,256,256);
+  for(let i=0;i<256;i+=2){
+    x.fillStyle=`rgba(255,255,255,${.16+Math.random()*.1})`; x.fillRect(0,i,256,1);
+    x.fillStyle=`rgba(0,0,0,${.12+Math.random()*.08})`; x.fillRect(i,0,1,256);
+  }
+  noise(x,256,256,.10,1);
+  return c;
+}
+// 拉毛/丝绒（单椅面料：长纤维 + 强凹凸）
+function velvetTex(){
+  const [c,x]=cv(256,256);
+  x.fillStyle='#ffffff'; x.fillRect(0,0,256,256);
+  for(let i=0;i<7000;i++){
+    const v=170+Math.random()*85|0;
+    x.fillStyle=`rgba(${v},${v},${v},.5)`;
+    x.fillRect(Math.random()*256|0, Math.random()*256|0, 1, 1+Math.random()*3|0);
+  }
+  return c;
+}
+// 釉面瓷砖（含砖缝）
+function tileTex(base='#dfe3e2', jw=5){
+  const [c,x]=cv(512,512), n=2, s=512/n;
+  x.fillStyle='#b9bdb9'; x.fillRect(0,0,512,512);
+  for(let i=0;i<n;i++) for(let j=0;j<n;j++){
+    x.fillStyle=base; x.fillRect(i*s+jw/2, j*s+jw/2, s-jw, s-jw);
+    for(let k=0;k<26;k++){
+      const gx=i*s+Math.random()*s, gy=j*s+Math.random()*s, r=18+Math.random()*70;
+      const g=x.createRadialGradient(gx,gy,0,gx,gy,r);
+      g.addColorStop(0,'rgba(255,255,255,.05)'); g.addColorStop(1,'rgba(0,0,0,0)');
+      x.fillStyle=g; x.fillRect(i*s,j*s,s,s);
+    }
+  }
+  noise(x,512,512,.015,1);
+  return c;
+}
+// 水磨石 / 微水泥台面
+function terrazzoTex(){
+  const [c,x]=cv(512,512);
+  x.fillStyle='#e7e3dc'; x.fillRect(0,0,512,512);
+  const cols=['#b9b3a8','#8f8a80','#d8d2c7','#6f6a62','#c9bda6','#a8a49e'];
+  for(let i=0;i<1500;i++){
+    x.fillStyle=cols[Math.random()*cols.length|0];
+    x.globalAlpha=.35+Math.random()*.45;
+    const r=1.5+Math.random()*5;
+    x.beginPath(); x.ellipse(Math.random()*512, Math.random()*512, r, r*(.5+Math.random()*.7), Math.random()*3, 0, 7); x.fill();
+  }
+  x.globalAlpha=1; noise(x,512,512,.04,1);
+  return c;
+}
+// 大理石纹（浴室台面）
+function marbleTex(){
+  const [c,x]=cv(512,512);
+  x.fillStyle='#f2f0ec'; x.fillRect(0,0,512,512);
+  for(let i=0;i<26;i++){
+    x.strokeStyle=`rgba(${110+Math.random()*40|0},${112+Math.random()*38|0},${116+Math.random()*36|0},${.06+Math.random()*.16})`;
+    x.lineWidth=.6+Math.random()*3.4;
+    let px=Math.random()*512, py=-10;
+    x.beginPath(); x.moveTo(px,py);
+    while(py<522){ py+=14+Math.random()*22; px+=(Math.random()-.5)*70; x.lineTo(px,py); }
+    x.stroke();
+  }
+  noise(x,512,512,.02,1);
+  return c;
+}
+// 拉丝金属（凹凸）
+function brushedBump(){
+  const [c,x]=cv(256,256);
+  x.fillStyle='#808080'; x.fillRect(0,0,256,256);
+  for(let i=0;i<2600;i++){
+    const v=Math.random()<.5?0:255;
+    x.fillStyle=`rgba(${v},${v},${v},.07)`;
+    x.fillRect(0, Math.random()*256|0, 256, 1);
+  }
+  return c;
+}
+// 书脊色卡（真实书籍常见的低饱和色）
+const BOOK_COLORS=[0x8d3b30,0x2f3b34,0xb5651d,0x3d4a63,0x7a6a53,0xd9cdbb,0x94564a,
+                   0x2b2b2b,0xa8763e,0x5c6b52,0xc9a227,0x6f4e37,0xe0d7c6,0x40404a];
+// 家具落地接触阴影（径向渐变贴地片）
+function contactTex(){
+  const [c,x]=cv(256,256);
+  const g=x.createRadialGradient(128,128,10,128,128,124);
+  g.addColorStop(0,'rgba(30,26,22,.42)'); g.addColorStop(.45,'rgba(30,26,22,.20)');
+  g.addColorStop(1,'rgba(30,26,22,0)');
+  x.fillStyle=g; x.fillRect(0,0,256,256);
+  return c;
+}
+// 电视开机画面（暖色环境影像）
+function screenTex(){
+  const [c,x]=cv(512,288);
+  const g=x.createLinearGradient(0,0,512,288);
+  g.addColorStop(0,'#1b2b3a'); g.addColorStop(.45,'#3f5f6d'); g.addColorStop(.75,'#c98a53'); g.addColorStop(1,'#f0c98a');
+  x.fillStyle=g; x.fillRect(0,0,512,288);
+  x.fillStyle='rgba(255,255,255,.55)';
+  x.beginPath(); x.arc(392,96,34,0,7); x.fill();
+  x.fillStyle='rgba(20,24,28,.55)';
+  for(let i=0;i<5;i++){ const h=60+Math.random()*120;
+    x.fillRect(40+i*96, 288-h, 62, h); }
+  x.fillStyle='rgba(255,255,255,.06)';
+  for(let y=0;y<288;y+=3) x.fillRect(0,y,512,1);
+  return c;
+}
+
+const WOOD = woodTex(), WOODB = woodBumpTex(), PLAS = plasterTex(), RUG = rugTex(),
+    CANE = caneTex(), STRIPE = stripeTex(), BLIND = blindTex(), CONC = concreteTex(),
+    SKY = skyTex(), LINEN = linenTex(), LINENB = linenBump(), VELVET = velvetTex(),
+    TILE = tileTex(), TILE_W = tileTex('#e9e6df'), TERR = terrazzoTex(), MARB = marbleTex(),
+    BRUSH = brushedBump(), CONTACT = contactTex(), SCREEN = screenTex();
+
+/* ---------- 材质（真实感：凹凸 + 粗糙度分层 + 清漆） ---------- */
+const M = {
+  wood:   new THREE.MeshStandardMaterial({ map:T(WOOD,2.4,2.4), bumpMap:T(WOODB,2.4,2.4), bumpScale:.014,
+           roughness:.46, roughnessMap:T(WOODB,2.4,2.4), metalness:.02 }),
+  woodF:  new THREE.MeshStandardMaterial({ map:T(WOOD,1.2,1.2), bumpMap:T(WOODB,1.2,1.2), bumpScale:.012,
+           roughness:.4, color:0xf3e6d4, metalness:.02 }),
+  wall:   new THREE.MeshStandardMaterial({ map:T(PLAS,3,2), bumpMap:T(PLAS,3,2), bumpScale:.006,
+           color:0xf2efe9, roughness:.96 }),
+  wallG:  new THREE.MeshStandardMaterial({ map:T(PLAS,2,1), bumpMap:T(PLAS,2,1), bumpScale:.005,
+           color:0x9aa0a1, roughness:.9 }),
+  ceil:   new THREE.MeshStandardMaterial({ color:0xf6f4f0, roughness:1 }),
+  rug:    new THREE.MeshStandardMaterial({ map:T(RUG,3,2), bumpMap:T(LINENB,3,2), bumpScale:.02,
+           color:0xbfb8ac, roughness:1 }),
+  sofa:   new THREE.MeshStandardMaterial({ map:T(LINEN,2,2), bumpMap:T(LINENB,2,2), bumpScale:.012,
+           color:0xe8e3da, roughness:.94 }),
+  sofaD:  new THREE.MeshStandardMaterial({ map:T(LINEN,1.4,1.4), bumpMap:T(LINENB,1.4,1.4), bumpScale:.012,
+           color:0xd9d3c8, roughness:.96 }),
+  // 单椅：条纹 + 拉毛纤维凹凸，sheen 模拟绒面边缘亮边
+  stripe: new THREE.MeshPhysicalMaterial({ map:T(STRIPE,1,1), bumpMap:T(VELVET,4,4), bumpScale:.02,
+           roughness:.92, sheen:.7, sheenRoughness:.6, sheenColor:new THREE.Color(0xffd9cf) }),
+  cane:   new THREE.MeshStandardMaterial({ map:T(CANE,3,3), bumpMap:T(CANE,3,3), bumpScale:.018,
+           color:0xe0bd8b, roughness:.62 }),
+  oak:    new THREE.MeshStandardMaterial({ map:T(WOOD,1,1), bumpMap:T(WOODB,1,1), bumpScale:.008,
+           color:0xb98a55, roughness:.44, metalness:.03 }),
+  dark:   new THREE.MeshStandardMaterial({ color:0x26231f, roughness:.5, metalness:.08 }),
+  black:  new THREE.MeshPhysicalMaterial({ color:0x0a0a0b, roughness:.24, metalness:.4, clearcoat:.6,
+           clearcoatRoughness:.25 }),
+  screen: new THREE.MeshPhysicalMaterial({ color:0x07080a, roughness:.1, metalness:.55, clearcoat:1,
+           clearcoatRoughness:.05 }),
+  conc:   new THREE.MeshStandardMaterial({ map:T(CONC,1.6,1), bumpMap:T(CONC,1.6,1), bumpScale:.01,
+           color:0xa8a49e, roughness:.82 }),
+  shade:  new THREE.MeshStandardMaterial({ map:T(LINEN,1,1), bumpMap:T(LINENB,1,1), bumpScale:.01,
+           color:0xf7f3ec, roughness:.88, side:THREE.DoubleSide,
+           emissive:0xffe6c0, emissiveIntensity:.12 }),
+  metal:  new THREE.MeshStandardMaterial({ color:0xbcbcbd, roughness:.28, metalness:.92,
+           bumpMap:T(BRUSH,1,1), bumpScale:.004 }),
+  glass:  new THREE.MeshPhysicalMaterial({ color:0xdfeaeb, roughness:.03, metalness:0,
+           transparent:true, opacity:.26, clearcoat:1, clearcoatRoughness:.02, ior:1.5,
+           envMapIntensity:1.4 }),
+  paper:  new THREE.MeshStandardMaterial({ color:0xf6f3ec, roughness:.92 }),
+  ceramic:new THREE.MeshPhysicalMaterial({ color:0xefe9df, roughness:.28, clearcoat:.7, clearcoatRoughness:.18 }),
+  bowl:   new THREE.MeshPhysicalMaterial({ color:0x2f3b34, roughness:.3, clearcoat:.85, clearcoatRoughness:.12 }),
+  leaf:   new THREE.MeshStandardMaterial({ color:0x6f7d55, roughness:.72, side:THREE.DoubleSide }),
+  branch: new THREE.MeshStandardMaterial({ color:0x7d6b53, roughness:.86, bumpMap:T(WOODB,1,1), bumpScale:.02 }),
+  emit:   new THREE.MeshStandardMaterial({ color:0xffffff, emissive:0xfff3dd, emissiveIntensity:2.2 }),
+  // 新增：石材 / 瓷砖 / 玻璃隔断 / 织物软包
+  stone:  new THREE.MeshPhysicalMaterial({ map:T(TERR,1.4,1.4), bumpMap:T(TERR,1.4,1.4), bumpScale:.006,
+           roughness:.34, clearcoat:.5, clearcoatRoughness:.2 }),
+  marble: new THREE.MeshPhysicalMaterial({ map:T(MARB,1,1), roughness:.16, clearcoat:.9, clearcoatRoughness:.06 }),
+  tile:   new THREE.MeshPhysicalMaterial({ map:T(TILE,1,1), roughness:.16, metalness:0,
+           clearcoat:.8, clearcoatRoughness:.08 }),
+  tileW:  new THREE.MeshPhysicalMaterial({ map:T(TILE_W,1,1), roughness:.22, clearcoat:.6, clearcoatRoughness:.12 }),
+  frosted:new THREE.MeshPhysicalMaterial({ color:0xeef1ef, roughness:.42, metalness:0,
+           transparent:true, opacity:.36, side:THREE.DoubleSide }),
+  mirror: new THREE.MeshStandardMaterial({ color:0xdfe6e6, roughness:.02, metalness:1, envMapIntensity:1.6 }),
+  fabric: new THREE.MeshStandardMaterial({ map:T(LINEN,1,1), bumpMap:T(LINENB,1,1), bumpScale:.014,
+           color:0xcfc7b8, roughness:.98 }),
+  rugBath:new THREE.MeshStandardMaterial({ map:T(RUG,1.6,1.6), bumpMap:T(LINENB,1.6,1.6), bumpScale:.024,
+           color:0xd6cfc2, roughness:1 }),
+  chrome: new THREE.MeshStandardMaterial({ color:0xdfe2e4, roughness:.06, metalness:1, envMapIntensity:1.5 }),
+  porcelain: new THREE.MeshPhysicalMaterial({ color:0xf7f6f3, roughness:.12, clearcoat:1, clearcoatRoughness:.06 }),
+  towel:  new THREE.MeshStandardMaterial({ map:T(LINEN,1,1), bumpMap:T(LINENB,1,1), bumpScale:.02,
+           color:0xf2ece1, roughness:1 }),
+};
+// 接触阴影贴片（提升落地真实感）
+const CONTACT_MAT = new THREE.MeshBasicMaterial({ map:T(CONTACT,1,1), transparent:true,
+  depthWrite:false, opacity:.85 });
+function contact(x, z, w, d, y=0.004){
+  const p=new THREE.Mesh(new THREE.PlaneGeometry(w,d), CONTACT_MAT);
+  p.rotation.x=-Math.PI/2; p.position.set(x,y,z); p.renderOrder=3;
+  return p;
+}
+
+/* ---------- 拾取注册（带所属空间，避免跨房间误选） ---------- */
+const pickables = [];
+function pick(obj, name, tag, desc, zones){
+  obj.traverse(o=>{ if(o.isMesh){ o.material = o.material.clone(); o.userData.orig = {
+    emissive:o.material.emissive ? o.material.emissive.getHex() : 0,
+    intensity:o.material.emissiveIntensity ?? 1 }; }});
+  obj.userData.info = { name, tag, desc, root:obj, zones: zones || ['all'] };
+  pickables.push(obj);
+  scene.add(obj);
+  return obj;
+}
+function inZone(info, zoneId){
+  const zs = info.zones || ['all'];
+  return zs.includes('all') || zs.includes(zoneId);
+}
+function box(w,h,d,r=0.02,seg=2){ return new RoundedBoxGeometry(w,h,d,seg,Math.min(r,Math.min(w,h,d)/2.2)); }
+function mesh(g,m,x=0,y=0,z=0){ const o=new THREE.Mesh(g,m); o.position.set(x,y,z); o.castShadow=true; o.receiveShadow=true; return o; }
+function slab(w,h,d,m,x,y,z){ const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m); o.position.set(x,y,z); o.castShadow=true; o.receiveShadow=true; return o; }
+// 可切换开关状态（双击）：落地灯组 + 电视组
+let TV = null, LAMP = null, SCREEN_TEX = null;
+function screenTexture(){ return SCREEN_TEX || (SCREEN_TEX = T(SCREEN,1,1)); }
+let lampOn = false, tvOn = false;         // 手动开关（双击）
+function applyLamp(){
+  if(!LAMP) return;
+  const k = lampOn ? 1 : (night ? 0.4 : 0);   // 关着时夜间留一点余辉
+  LAMP.traverse(o=>{
+    if(o.isLight) o.intensity = 3.0 * k;
+    if(o.isMesh && o.userData.orig){
+      if(o.userData.role==='shade')
+        o.material.emissiveIntensity = night ? (0.5 + k) : (0.12 + k*0.75);
+      if(o.userData.role==='emit')
+        o.material.emissiveIntensity = k ? 1.4 + 2.2*k : (night ? 0.9 : 0.3);
+    }
+  });
+}
+function applyTv(){
+  if(!TV) return;
+  const sc = TV.userData.screenMesh;
+  if(!sc) return;
+  const m = sc.material;
+  if(tvOn){
+    m.map = screenTexture(); m.emissiveMap = m.map;
+    m.emissive.setHex(0xffffff); m.emissiveIntensity = night ? 1.15 : 0.95;
+    m.color.setHex(0xffffff); m.needsUpdate = true;
+  } else {
+    m.map = null; m.emissiveMap = null;
+    m.emissive.setHex(night ? 0x2a4a6a : 0x000000);
+    m.emissiveIntensity = night ? 1.0 : 0;
+    m.color.setHex(0x07080a); m.needsUpdate = true;
+  }
+}
+function toggleAction(root){
+  const t = root.userData.toggle;
+  if(t==='lamp'){ lampOn=!lampOn; applyLamp(); return lampOn?'开灯': '关灯'; }
+  if(t==='tv'){ tvOn=!tvOn; applyTv(); return tvOn?'开机':'关机'; }
+  return null;
+}
+function role(o,r){ o.userData.role = r; return o; }
+
+/* ---------- 建筑外壳 ---------- */
+const shell = new THREE.Group(); scene.add(shell);
+// 地板（含地台区）：主厅 + 侧翼（浴室/衣帽间）两块，避免重叠产生 z-fighting
+const floor = mesh(new THREE.BoxGeometry(8.2,0.22,8.2), M.wood, 0,-0.11,-0.35);
+floor.receiveShadow=true; floor.castShadow=false; shell.add(floor);
+//  inward-facing 墙面：从室外看穿，便于环绕
+function wall(w,h,m,x,y,z,rx=0,ry=0){
+  const p=new THREE.Mesh(new THREE.PlaneGeometry(w,h),m);
+  p.position.set(x,y,z); p.rotation.set(rx,ry,0); p.receiveShadow=true; shell.add(p); return p;
+}
+const H=3.0;
+/* 前墙：单面朝内 + 两个门洞（衣帽间 / 浴室入口）。
+   朝内保证娃娃屋视角不被近侧墙挡住，与主厅其他墙一致 */
+const DOOR = { h:2.10, w:0.90 };
+function wallSeg(w,h,x,y,z,ry=Math.PI){ return wall(w,h,M.wall,x,y,z,0,ry); }
+wallSeg(4.10,H, -2.05,H/2,3.72);                              // A 段
+wallSeg(1.00,H,  1.40,H/2,3.72);                              // B 段（两门洞之间）
+wallSeg(1.30,H,  3.45,H/2,3.72);                              // C 段
+wallSeg(DOOR.w,H-DOOR.h, 0.45,DOOR.h+(H-DOOR.h)/2,3.72);      // 衣帽间门过梁
+wallSeg(DOOR.w,H-DOOR.h, 2.35,DOOR.h+(H-DOOR.h)/2,3.72);      // 浴室门过梁
+wall(8.2,H,M.wall, -4.1,H/2,-0.35, 0,Math.PI/2);        // 左墙（电视墙）
+wall(8.2,H,M.wall,  4.1,H/2,-0.35, 0,-Math.PI/2);       // 右墙（沙发墙）
+/* ---- 侧翼：衣帽间 + 浴室（x -0.40..4.10, z 3.75..6.40）---- */
+const WG = { x0:-0.40, x1:4.10, z0:3.75, z1:6.40, split:1.40 };
+(function(){
+  const cz=(WG.z0+WG.z1)/2, dd=WG.z1-WG.z0, wx=WG.x1-WG.x0;
+  // 地板：衣帽间木地板 / 浴室防滑砖（与主厅地板分块，避免共面闪烁）
+  const f1=mesh(new THREE.BoxGeometry(WG.split-WG.x0,0.22,dd), M.wood, (WG.x0+WG.split)/2,-0.11,cz);
+  f1.castShadow=false; shell.add(f1);
+  const bathFloor = new THREE.Mesh(new THREE.BoxGeometry(WG.x1-WG.split,0.22,dd),
+    new THREE.MeshPhysicalMaterial({ map:T(TILE,2.6,3.2), bumpMap:T(TILE,2.6,3.2), bumpScale:.006,
+      roughness:.2, clearcoat:.7, clearcoatRoughness:.1 }));
+  bathFloor.position.set((WG.split+WG.x1)/2,-0.11,cz); bathFloor.receiveShadow=true; shell.add(bathFloor);
+  // 三面单面朝内墙（与主厅一致，娃娃屋视角下近墙自动透明）
+  wall(wx,H,M.wall, (WG.x0+WG.x1)/2,H/2,WG.z1, 0,Math.PI);   // 北
+  wall(dd,H,M.wall, WG.x0,H/2,cz, 0,Math.PI/2);              // 西
+  wall(dd,H,M.wall, WG.x1,H/2,cz, 0,-Math.PI/2);             // 东
+  // 两间分隔墙（薄实体）
+  shell.add(slab(0.12,H,dd,M.wall,WG.split,H/2,cz));
+  // 浴室墙砖：北墙 + 东墙内表面
+  const tb=(w,h,x,y,z,ry)=>{ const s=w/0.6;
+    const m=new THREE.MeshPhysicalMaterial({ map:T(TILE,s,h/0.6), bumpMap:T(TILE,s,h/0.6),
+      bumpScale:.005, roughness:.18, clearcoat:.8, clearcoatRoughness:.08 });
+    const p=new THREE.Mesh(new THREE.PlaneGeometry(w,h),m);
+    p.position.set(x,y,z); p.rotation.y=ry; p.receiveShadow=true; shell.add(p); };
+  tb(WG.x1-WG.split-0.14, 2.10, (WG.split+WG.x1)/2+0.07, 1.05, WG.z1-0.015, Math.PI);
+  tb(dd-0.02, 2.10, WG.x1-0.015, 1.05, cz, -Math.PI/2);
+})();
+// 屋顶组（娃娃屋模式下整体隐藏）
+const roofGroup = new THREE.Group(); scene.add(roofGroup);
+const ceil = new THREE.Mesh(new THREE.PlaneGeometry(8.2,8.2), M.ceil);
+ceil.rotation.x=Math.PI/2; ceil.position.set(0,H,-0.35); roofGroup.add(ceil);
+// 侧翼天花
+const ceilW = new THREE.Mesh(new THREE.PlaneGeometry(WG.x1-WG.x0, WG.z1-WG.z0), M.ceil);
+ceilW.rotation.x=Math.PI/2; ceilW.position.set((WG.x0+WG.x1)/2,H,(WG.z0+WG.z1)/2); roofGroup.add(ceilW);
+// 电视墙上方灰色吊顶带
+roofGroup.add(slab(1.1,0.34,4.7,M.wallG,-3.55,H-0.17,1.4));
+// 地台与客厅之间的横梁
+roofGroup.add(slab(6.2,0.5,0.42,M.wallG,0,H-0.25,-1.0));
+// 隔断墙垛
+shell.add(slab(1.1,H,0.24,M.wall,-3.55,H/2,-1.0));
+shell.add(slab(1.1,H,0.24,M.wall,3.55,H/2,-1.0));
+// 窗洞墙体（投射出窗形光斑）
+for(const s of [
+  slab(1.3,3.0,0.2,M.wall,-3.45,1.5,-4.35),
+  slab(1.3,3.0,0.2,M.wall, 3.45,1.5,-4.35),
+  slab(5.9,0.4,0.2,M.wall,0,2.8,-4.35),
+  slab(5.9,0.34,0.2,M.wall,0,0.17,-4.35),
+]){ s.castShadow=true; shell.add(s); }
+// 模型底座（远景时提供实体感）：覆盖主厅 + 侧翼
+const plinth = new THREE.Mesh(new THREE.BoxGeometry(9.3,0.3,12.1),
+  new THREE.MeshStandardMaterial({ color:0xd8d3ca, roughness:.95 }));
+plinth.position.set(0,-0.37,0.9); plinth.receiveShadow=true; shell.add(plinth);
+// 窗外天光背景：只在室内机位透过窗洞时才需要；
+// 全屋俯瞰时这块竖板会像悬在模型后方的纸板，所以默认隐藏
+const sky = new THREE.Mesh(new THREE.PlaneGeometry(18,7), new THREE.MeshBasicMaterial({ map:T(SKY,1,1) }));
+sky.position.set(0,1.6,-8.6); sky.visible = false; shell.add(sky);
+
+/* ---------- 房间分区（俯瞰模式下可点击进入） ---------- */
+function labelSprite(text, sub){
+  const [c,x]=cv(512,160);
+  x.clearRect(0,0,512,160);
+  x.fillStyle='rgba(28,26,23,.82)';
+  const r=26,w=512,h=120;
+  x.beginPath();
+  x.moveTo(r,20); x.lineTo(w-r,20); x.quadraticCurveTo(w,20,w,20+r);
+  x.lineTo(w,h-r-20+20); x.quadraticCurveTo(w,h-20,w-r,h-20);
+  x.lineTo(r,h-20); x.quadraticCurveTo(0,h-20,0,h-r); x.lineTo(0,20+r); x.quadraticCurveTo(0,20,r,20);
+  x.closePath(); x.fill();
+  x.fillStyle='#f5f1ea'; x.textAlign='center';
+  x.font='600 46px -apple-system,"PingFang SC","Noto Sans SC",sans-serif';
+  x.fillText(text, 256, 82);
+  if(sub){ x.fillStyle='rgba(245,241,234,.55)'; x.font='32px sans-serif'; x.fillText(sub, 256, 122); }
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace;
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({ map:t, transparent:true, depthTest:false, depthWrite:false }));
+  s.scale.set(1.9, 0.6, 1); s.renderOrder = 20;
+  return s;
+}
+const ZONES = [
+  { id:'living', name:'会客区',     rect:[-1.2,4.1,-1.0,3.72], y:0.06,
+    view:{pos:[2.7,1.75,2.85],  tgt:[0.2,0.95,-0.4], need:6.6} },
+  { id:'deck',   name:'地台阅读区', rect:[-4.1,4.1,-4.45,-1.0], y:0.46,
+    view:{pos:[3.2,2.2,1.6],   tgt:[0,0.8,-2.7],    need:5.6} },
+  { id:'tv',     name:'影音墙',     rect:[-4.1,-1.2,-1.0,3.72], y:0.06,
+    view:{pos:[2.4,1.6,3.0],   tgt:[-3.7,1.3,1.3],  need:3.6} },
+  { id:'bath',   name:'浴室卫生间', rect:[1.47,4.10,3.75,6.40], y:0.06, doll:true,
+    view:{tgt:[2.78,0.75,5.20], dir:[0.10,1.0,0.60]} },
+  { id:'closet', name:'衣帽间',     rect:[-0.40,1.33,3.75,6.40], y:0.06, doll:true,
+    view:{tgt:[0.42,0.75,5.20], dir:[0.06,1.0,0.60]} },
+];
+let hoveredZone = null;
+for(const z of ZONES){
+  const [x0,x1,z0,z1] = z.rect;
+  const cx=(x0+x1)/2, cz=(z0+z1)/2, sx=x1-x0, sz=z1-z0;
+  const g=new THREE.Group();
+  const plate=new THREE.Mesh(new THREE.PlaneGeometry(sx, sz),
+    new THREE.MeshBasicMaterial({ color:0x3d78ff, transparent:true, opacity:0.06, depthWrite:false }));
+  plate.rotation.x=-Math.PI/2; plate.position.set(cx, z.y, cz);
+  plate.renderOrder = 8; g.add(plate);
+  const edge=new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.PlaneGeometry(sx, sz)),
+    new THREE.LineBasicMaterial({ color:0x2f6bff, transparent:true, opacity:0.45, depthWrite:false }));
+  edge.rotation.x=-Math.PI/2; edge.position.set(cx, z.y+0.01, cz);
+  edge.renderOrder = 9; g.add(edge);
+  const lb = labelSprite(z.name); lb.position.set(cx, z.y+1.0, cz); g.add(lb);
+  scene.add(g);
+  z.group=g; z.plate=plate; z.edge=edge; z.label=lb;
+}
+// 地面平面，用于把点击映射到房间分区（避免立体遮挡导致误判）
+const FLOOR_PLANE = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+function zoneAtPoint(pt){
+  for(const z of ZONES){
+    const [x0,x1,z0,z1]=z.rect;
+    if(pt.x>=x0 && pt.x<=x1 && pt.z>=z0 && pt.z<=z1) return z;
+  }
+  return null;
+}
+
+/* ---------- 家具 ---------- */
+// 1 抬高地台（通铺至两侧墙，落地灯等物件的地面与地台持平）
+(function(){
+  const g=new THREE.Group();
+  g.add(slab(8.2,0.34,3.45,M.wall,0,0.17,-2.72));
+  const top=mesh(box(8.2,0.06,3.45,0.02),M.woodF,0,0.37,-2.72); g.add(top);
+  const pad=mesh(box(5.0,0.1,1.05,0.05),M.sofaD,0,0.45,-3.85); g.add(pad);
+  // 地台边缘灯带槽（真实感）
+  g.add(slab(8.2,0.02,0.03,M.dark,0,0.395,-0.995));
+  g.children.forEach(c=>{c.receiveShadow=true});
+  pick(g,'抬高地台 · 木平台','硬装 / HARDSCAPE','320mm 高木质地台通铺至两侧墙，与客厅形成抬升的静谧区，可坐可卧、承接窗光。', ['deck']);
+})();
+
+// 2 百叶窗 + 窗
+(function(){
+  const g=new THREE.Group();
+  const bm=new THREE.MeshStandardMaterial({ map:T(BLIND,1,26), color:0xd8bd97, transparent:true, opacity:.9,
+    roughness:.7, side:THREE.DoubleSide });
+  for(let i=0;i<3;i++){
+    const p=new THREE.Mesh(new THREE.PlaneGeometry(1.95,2.2), bm);
+    p.position.set(-2.0+i*2.0, 1.5, -4.24); g.add(p);
+  }
+  g.add(slab(6.0,0.06,0.06,M.dark,0,2.63,-4.2));       // 帘轨
+  const gl=new THREE.Mesh(new THREE.PlaneGeometry(5.9,2.35), new THREE.MeshPhysicalMaterial({
+    color:0xcfe0e6, transparent:true, opacity:.18, roughness:.05, metalness:0 }));
+  gl.position.set(0,1.5,-4.4); g.add(gl);
+  g.add(slab(6.0,0.08,0.12,M.wall,0,0.36,-4.36));
+  pick(g,'木百叶帘','软装 / SOFT FURNISHING','木色横向百叶，过滤直射光，让地台区保持柔和的漫射亮度。', ['deck']);
+})();
+
+// 3 木质书架（分层 + 真实摆书：竖排、斜靠、平摞、横放）
+(function(){
+  const g=new THREE.Group();
+  const W=0.42, Hh=2.05, L=1.7, rows=5;
+  g.add(slab(W,Hh,0.04,M.oak,0,Hh/2,-L/2));
+  g.add(slab(W,Hh,0.04,M.oak,0,Hh/2, L/2));
+  g.add(slab(0.04,Hh,L,M.oak,-W/2,Hh/2,0));
+  g.add(slab(0.04,Hh,L,M.oak, W/2,Hh/2,0));
+  g.add(slab(0.04,Hh,L-0.04,M.wall,-W/2+0.02,Hh/2,0));         // 背板（贴墙一侧）
+  const shelfY=[];
+  for(let i=0;i<=rows;i++){
+    const y=0.02+i*(Hh-0.06)/rows;
+    shelfY.push(y);
+    const s=slab(W-0.06,0.035,L-0.06,M.oak,0,y,0);
+    g.add(s);
+  }
+  // 每层净高
+  const gapY=(Hh-0.06)/rows;
+  let seed=7;
+  const rnd=()=>{ seed=(seed*1103515245+12345)&0x7fffffff; return seed/0x7fffffff; };
+  const bookMat=(col)=>new THREE.MeshStandardMaterial({ color:col, roughness:.78 });
+  for(let r=0;r<rows;r++){
+    const y0=shelfY[r]+0.018;                       // 层板顶面
+    let z=-L/2+0.10;
+    const limit=L/2-0.10;
+    if(r===2){                                       // 中间一层：平摞书 + 器物
+      let h=y0;
+      for(let k=0;k<4;k++){
+        const th=0.028+rnd()*0.014;
+        const b=mesh(box(W-0.10,th,0.24+rnd()*0.05,0.004),
+          bookMat(BOOK_COLORS[(k*3+r)%BOOK_COLORS.length]), 0, h+th/2, -0.30);
+        b.rotation.y=(rnd()-0.5)*0.10; g.add(b); h+=th+0.002;
+      }
+      g.add(mesh(new THREE.CylinderGeometry(0.055,0.075,0.16,16),M.ceramic,0,y0+0.08,0.34));
+      continue;
+    }
+    while(z<limit-0.04){
+      const mode=rnd();
+      if(mode<0.62){                                  // 竖排成组
+        const grp=2+Math.floor(rnd()*4);
+        for(let k=0;k<grp && z<limit-0.03;k++){
+          const t=0.020+rnd()*0.026;                  // 书厚
+          const bh=0.20+rnd()*0.10;                   // 书高
+          const bd=0.26+rnd()*0.06;                   // 书深（沿 x）
+          const b=mesh(box(bd,bh,t,0.003), bookMat(BOOK_COLORS[(rnd()*BOOK_COLORS.length)|0]),
+            (rnd()-0.5)*0.03, y0+bh/2, z+t/2);
+          b.rotation.y=(rnd()-0.5)*0.03; g.add(b);
+          z+=t+0.004;
+        }
+      } else if(mode<0.78){                           // 斜靠一本
+        const t=0.024+rnd()*0.02, bh=0.24+rnd()*0.06;
+        const b=mesh(box(0.28,bh,t,0.003), bookMat(BOOK_COLORS[(rnd()*BOOK_COLORS.length)|0]),
+          0, y0+bh*0.42, z+t/2);
+        b.rotation.x=0.28; g.add(b); z+=t+0.05;
+      } else if(mode<0.90){                           // 平摞两本
+        let h=y0;
+        for(let k=0;k<2;k++){
+          const th=0.030+rnd()*0.012;
+          g.add(mesh(box(W-0.12,th,0.24,0.004), bookMat(BOOK_COLORS[(rnd()*BOOK_COLORS.length)|0]),
+            0, h+th/2, z+0.12));
+          h+=th+0.002;
+        }
+        z+=0.26;
+      } else { z+=0.06+rnd()*0.05; }                  // 留白
+    }
+    // 层间小器物点缀
+    if(r===4) g.add(mesh(new THREE.SphereGeometry(0.062,14,10), M.bowl, 0.02, y0+0.06, L/2-0.20));
+  }
+  g.position.set(-3.85,0.40,-2.9);
+  g.add(contact(0.06,0,0.52,1.9,0.41));
+  pick(g,'木质开放书架','家具 / FURNITURE','橡木五层格架，竖排、斜靠与平摞的书籍搭配陶器陈列，同时界定地台边界。', ['deck']);
+})();
+
+// 4 花器与枝条（CatmullRom 曲线生成连贯主枝 + 分枝，叶片沿曲线连续排布）
+(function(){
+  const g=new THREE.Group();
+  const v=mesh(new THREE.CylinderGeometry(0.09,0.13,0.34,20),M.ceramic,0,0.17,0); g.add(v);
+  g.add(mesh(new THREE.CylinderGeometry(0.055,0.09,0.08,20),M.ceramic,0,0.37,0));
+  const LEAF=new THREE.SphereGeometry(0.042,8,6);
+  function stem(pts, leafDensity){
+    const curve=new THREE.CatmullRomCurve3(pts.map(p=>new THREE.Vector3(...p)), false, 'catmullrom', 0.4);
+    const m=new THREE.Mesh(new THREE.TubeGeometry(curve, 44, 0.0115, 7, false), M.branch);
+    m.castShadow=true; m.receiveShadow=true; g.add(m);
+    const n=Math.max(3, Math.round(curve.getLength()*leafDensity));
+    for(let i=1;i<=n;i++){
+      const t=i/(n+1), p=curve.getPointAt(t), tan=curve.getTangentAt(t);
+      const side=(i%2?1:-1);
+      const leaf=new THREE.Mesh(LEAF, M.leaf);
+      const perp=new THREE.Vector3(-tan.z,0,tan.x);
+      if(perp.lengthSq()<1e-6) perp.set(1,0,0);
+      perp.normalize().multiplyScalar(side*0.055);
+      leaf.position.copy(p).add(perp).add(new THREE.Vector3(0,0.014,0));
+      leaf.scale.set(0.55,0.28,1.5);
+      leaf.lookAt(leaf.position.clone().add(tan));
+      leaf.rotateZ(side*0.5);
+      leaf.castShadow=true; g.add(leaf);
+    }
+    return curve;
+  }
+  // 3 根主枝：自瓶口出发，弧度连贯向外舒展
+  const mains=[
+    [[0,0.34,0],[0.02,0.62,-0.03],[-0.06,0.95,-0.16],[-0.02,1.28,-0.34],[0.12,1.55,-0.52]],
+    [[0,0.34,0],[0.03,0.60,0.04],[0.14,0.90,0.10],[0.20,1.18,-0.05],[0.14,1.44,-0.24]],
+    [[0,0.34,0],[-0.03,0.58,0.02],[-0.14,0.86,0.12],[-0.26,1.10,0.02],[-0.30,1.32,-0.16]],
+  ].map(p=>stem(p,7));
+  // 分枝：起点接在主枝上，与主枝同向续接，避免"断开"观感
+  const subs=[
+    [[-0.02,1.28,-0.34],[-0.14,1.42,-0.44],[-0.30,1.52,-0.50]],
+    [[0.20,1.18,-0.05],[0.34,1.30,-0.10],[0.44,1.40,-0.24]],
+    [[-0.26,1.10,0.02],[-0.40,1.20,0.10],[-0.48,1.28,0.02]],
+    [[0.14,0.90,0.10],[0.26,1.00,0.22],[0.30,1.12,0.24]],
+  ].map(p=>stem(p,9));
+  void mains; void subs;
+  g.position.set(0.35,0.40,-3.5);
+  pick(g,'插花枝条','陈设 / STYLING','一株舒展的枝条 + 素色陶器，是地台尽端的视觉焦点。', ['deck']);
+})();
+
+// 5 羊毛地毯
+(function(){
+  const g=new THREE.Group();
+  const r=mesh(box(4.7,0.024,3.25,0.012),M.rug,0,0.012,0);
+  r.castShadow=false; r.receiveShadow=true; g.add(r);
+  g.position.set(0.85,0,1.0);
+  pick(g,'羊毛短绒地毯','软装 / SOFT FURNISHING','暖灰色短绒地毯，界定会客区，吸收回声并统一地面色调。', ['living']);
+})();
+
+// 6 模块化布艺沙发（整体内收，靠背与右墙之间留出通行缝，不再穿墙）
+(function(){
+  const g=new THREE.Group();
+  const L=3.4;
+  g.add(slab(1.06,0.14,L,M.sofaD,0,0.09,0));                       // 底座
+  for(let i=0;i<3;i++)
+    g.add(mesh(box(1.0,0.24,L/3-0.05,0.09),M.sofa,0.02,0.28,-L/2+(L/3)*(i+0.5)));
+  g.add(slab(0.2,0.62,L,M.sofaD,0.44,0.6,0));                      // 靠背
+  for(let i=0;i<3;i++){
+    const b=mesh(box(0.24,0.46,L/3-0.12,0.1),M.sofa,0.3,0.66,-L/2+(L/3)*(i+0.5));
+    b.rotation.z=-0.1; g.add(b);
+  }
+  for(let i=0;i<3;i++){                                            // 圆柱抱枕
+    const c=mesh(new THREE.CylinderGeometry(0.11,0.11,0.44,14),M.sofa,0.14,0.55,-L/2+(L/3)*(i+0.5));
+    c.rotation.x=Math.PI/2; c.rotation.z=0.06; g.add(c);
+  }
+  g.add(mesh(box(1.08,0.44,0.28,0.12),M.sofa,0,0.35,L/2+0.12));     // 扶手
+  g.add(mesh(box(1.08,0.44,0.28,0.12),M.sofa,0,0.35,-L/2-0.12));    // 扶手
+  g.add(contact(0,0,1.7,L+0.7));
+  g.position.set(3.05,0,0.55);
+  pick(g,'模块化布艺沙发','家具 / FURNITURE','米白亚麻模块沙发，低靠背 + 圆柱抱枕，带前后扶手模块，靠墙留出通行缝。', ['living']);
+})();
+
+// 7 条纹异形单人椅（壳体为带厚度的实心弧面，与坐垫/底座咬合，不再出现分离缝隙）
+(function(){
+  const g=new THREE.Group();
+  const A0=-2.35, A1=0.25;                       // 靠背弧面角度范围
+  const base=mesh(box(0.92,0.34,0.86,0.16),M.stripe,0,0.2,0.02); g.add(base);
+  const seat=mesh(box(0.86,0.20,0.80,0.10),M.stripe,0,0.40,0.04); g.add(seat);
+  // 靠背：环形扇面挤出成实体，底部插入坐垫 6cm
+  const sh=new THREE.Shape();
+  sh.absarc(0,0,0.62,A0,A1,false);
+  sh.absarc(0,0,0.545,A1,A0,true);
+  sh.closePath();
+  const backGeo=new THREE.ExtrudeGeometry(sh,{depth:0.62,bevelEnabled:false,curveSegments:26,steps:1});
+  backGeo.rotateX(-Math.PI/2);
+  const back=new THREE.Mesh(backGeo, M.stripe);
+  back.position.set(0,0.34,-0.16);
+  back.scale.set(1,1,0.72);
+  back.castShadow=back.receiveShadow=true; g.add(back);
+  // 顶部卷边：与靠背同心的半圆管，消除薄边感
+  const roll=new THREE.Mesh(new THREE.TorusGeometry(0.5825,0.042,10,30,A1-A0),M.stripe);
+  roll.rotation.x=Math.PI/2; roll.rotation.z=-A1;
+  roll.position.set(0,0.96,-0.16); roll.scale.set(1,0.72,1);
+  roll.castShadow=true; g.add(roll);
+  // 扶手：从坐垫外沿斜接到靠背外侧
+  for(const sx of [-1,1]){
+    const a=mesh(box(0.22,0.40,0.66,0.11),M.stripe,sx*0.40,0.46,0.10);
+    a.rotation.z=sx*0.10; g.add(a);
+  }
+  g.add(contact(0,0.02,1.5,1.6));
+  g.position.set(-0.35,0,-0.1); g.rotation.y=0.98;
+  pick(g,'条纹异形单椅','家具 / FURNITURE','卷曲造型的休闲单椅，砖红 × 藕粉横条纹，是空间里的色彩锚点。', ['living']);
+})();
+
+// 8 条纹坐墩
+(function(){
+  const g=new THREE.Group();
+  const p=mesh(new THREE.SphereGeometry(0.34,22,16),M.stripe,0,0.28,0);
+  p.scale.set(1.05,0.82,1.0); g.add(p);
+  g.position.set(-1.85,0,1.05);
+  pick(g,'圆形条纹坐墩','家具 / FURNITURE','与单椅同面料的落地坐墩，可搁脚、可加座。', ['living']);
+})();
+
+// 9 玻璃圆茶几
+(function(){
+  const g=new THREE.Group();
+  const top=mesh(new THREE.CylinderGeometry(0.62,0.62,0.022,40),M.glass,0,0.37,0);
+  top.castShadow=false; g.add(top);
+  g.add(slab(0.44,0.34,0.44,M.dark,0,0.18,0));
+  g.add(slab(0.62,0.03,0.62,M.dark,0,0.015,0));
+  for(let i=0;i<3;i++){
+    const m=mesh(box(0.28,0.012,0.22,0.004),i===1?M.sofaD:M.paper,(i-1)*0.05,0.39+i*0.014,0.12);
+    m.rotation.y=0.12*i-0.1; g.add(m);
+  }
+  const bowl=mesh(new THREE.CylinderGeometry(0.13,0.08,0.07,20),M.bowl,-0.16,0.415,-0.12); g.add(bowl);
+  for(let i=0;i<5;i++){
+    const f=mesh(new THREE.SphereGeometry(0.032,10,8),new THREE.MeshStandardMaterial({color:0x8d3b30,roughness:.5}),
+      -0.16+(Math.random()-.5)*0.13,0.455,-0.12+(Math.random()-.5)*0.13); g.add(f);
+  }
+  g.add(mesh(box(0.09,0.07,0.09,0.02),M.ceramic,0.2,0.415,-0.16));
+  g.position.set(1.0,0,0.85);
+  pick(g,'圆形玻璃茶几','家具 / FURNITURE','透明玻璃圆台面 + 深色实木墩座，弱化体量感、保持视线通透。', ['living']);
+})();
+
+// 10 藤编休闲椅
+(function(){
+  const g=new THREE.Group();
+  const legM=M.oak;
+  function leg(x1,z1,x2,z2,y){
+    const a=new THREE.Vector3(x1,0,z1), b=new THREE.Vector3(x2,y,z2);
+    const dir=b.clone().sub(a), len=dir.length();
+    const l=new THREE.Mesh(new THREE.CylinderGeometry(0.028,0.022,len,8),legM);
+    l.position.copy(a).add(b).multiplyScalar(0.5);
+    l.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.normalize());
+    l.castShadow=true; g.add(l);
+  }
+  leg(-0.28,0.3, 0.02,0.05, 0.42); leg(0.28,0.3, 0.02,0.05, 0.42);
+  leg(-0.3,-0.3, -0.05,-0.02, 0.4); leg(0.3,-0.3, -0.05,-0.02, 0.4);
+  const seat=mesh(box(0.62,0.05,0.6,0.02),M.cane,0,0.44,0.02); seat.rotation.x=-0.06; g.add(seat);
+  g.add(slab(0.66,0.05,0.06,M.oak,0,0.47,-0.3));
+  const bk=mesh(box(0.62,0.52,0.05,0.02),M.cane,0,0.72,-0.32); bk.rotation.x=0.3; g.add(bk);
+  g.add(slab(0.66,0.06,0.06,M.oak,0,0.97,-0.4));
+  for(const sx of [-1,1]){
+    const r=mesh(box(0.06,0.05,0.62,0.02),M.oak,sx*0.32,0.62,0.02); r.rotation.x=-0.05; g.add(r);
+    g.add(slab(0.05,0.3,0.05,M.oak,sx*0.32,0.5,-0.28));
+  }
+  g.position.set(-2.0,0,2.15); g.rotation.y=1.95;
+  pick(g,'藤编木质休闲椅','家具 / FURNITURE','实木框架 + 天然藤编坐背，低矮斜躺角度，为中古风味的单座。', ['living']);
+})();
+
+// 11 落地灯（立于抬高地台之上；双击开/关灯）
+(function(){
+  const g=new THREE.Group();
+  g.add(mesh(new THREE.CylinderGeometry(0.19,0.21,0.03,24),M.wallG,0,0.015,0));
+  g.add(mesh(new THREE.CylinderGeometry(0.026,0.03,1.42,12),M.wallG,0,0.72,0));
+  const sh=new THREE.Mesh(new THREE.CylinderGeometry(0.24,0.29,0.42,26,1,true),M.shade);
+  sh.position.set(0,1.62,0); sh.castShadow=false; g.add(role(sh,'shade'));
+  g.add(role(mesh(new THREE.CylinderGeometry(0.24,0.24,0.012,26),M.emit,0,1.42,0),'emit'));
+  // 灯罩内侧下沿出光片，让"点亮"在白天也看得出来
+  g.add(role(mesh(new THREE.CylinderGeometry(0.27,0.27,0.008,26),M.emit,0,1.412,0),'emit'));
+  const lampLight=new THREE.PointLight(0xffd9a8,0,6,2); lampLight.position.set(0,1.5,0); g.add(lampLight);
+  LAMP = g;
+  g.position.set(3.62,0.40,-2.05);        // 地台台面 y=0.40，与木平台持平
+  g.userData.toggle='lamp';
+  pick(g,'布艺落地灯','灯具 / LIGHTING','亚麻灯罩向上洗光，形成柔和的间接照明，夜间作为主氛围光。双击可开关。', ['deck']);
+})();
+
+// 12 壁挂电视（双击屏幕开/关机）
+(function(){
+  const g=new THREE.Group();
+  g.add(slab(0.05,1.16,1.96,M.black,-3.98,1.56,1.25));
+  const scMat = new THREE.MeshPhysicalMaterial({ color:0x07080a, roughness:.1, metalness:.55,
+    clearcoat:1, clearcoatRoughness:.05 });
+  const sc=new THREE.Mesh(new THREE.PlaneGeometry(1.88,1.08), scMat);
+  sc.position.set(-3.95,1.56,1.25); sc.rotation.y=Math.PI/2;
+  g.add(role(sc,'screen'));
+  g.userData.toggle='tv';
+  g.userData.screenMesh = sc;
+  TV = g;
+  pick(g,'大尺寸壁挂电视','设备 / EQUIPMENT','75 英寸超薄壁挂屏，黑屏时作为墙面的深色留白。双击屏幕可开/关机。', ['tv']);
+})();
+
+// 13 混凝土壁炉台
+(function(){
+  const g=new THREE.Group();
+  g.add(slab(0.78,0.42,2.7,M.conc,-3.62,0.21,1.25));
+  g.add(slab(0.62,0.1,2.4,M.conc,-3.6,0.47,1.25));
+  const slot=slab(0.5,0.16,1.5,M.dark,-3.66,0.3,1.25); g.add(slot);
+  g.add(slab(0.34,0.06,2.9,M.conc,-3.84,0.03,1.25));
+  pick(g,'微水泥地台 / 壁炉','硬装 / HARDSCAPE','灰色微水泥低台沿电视墙延展，内嵌线性电子壁炉位。', ['tv']);
+})();
+
+// 14 天花射灯
+(function(){
+  const g=new THREE.Group();
+  const pos=[[-2.2,2.4],[2.2,2.4],[-2.2,-0.4],[2.2,-0.4],[0,1.0]];
+  for(const [x,z] of pos){
+    const d=new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.055,0.02,16),M.emit);
+    d.position.set(x,H-0.012,z); g.add(role(d,'emit'));
+    g.add(mesh(new THREE.TorusGeometry(0.062,0.01,6,18),M.metal,x,H-0.03,z));
+    g.children[g.children.length-1].rotation.x=Math.PI/2;
+  }
+  pick(g,'嵌入式射灯','灯具 / LIGHTING','无边框嵌入射灯，点状布光，弱化天花的存在感。', ['living','deck','tv']);
+  roofGroup.add(g);   // 随屋顶一起隐藏
+})();
+
+// 15 边几与器物
+(function(){
+  const g=new THREE.Group();
+  g.add(mesh(new THREE.CylinderGeometry(0.22,0.22,0.42,22),M.oak,0,0.21,0));
+  g.add(mesh(new THREE.CylinderGeometry(0.24,0.24,0.03,22),M.oak,0,0.435,0));
+  g.add(mesh(box(0.2,0.03,0.15,0.01),M.paper,0.02,0.465,0));
+  g.position.set(3.15,0,3.05);
+  g.add(contact(0,0,0.8,0.8));
+  pick(g,'实木边几','家具 / FURNITURE','小圆边几，紧贴沙发，随手放书与杯具。', ['living']);
+})();
+
+/* ---------- 16 浴室卫生间（侧翼东段，门洞 x 1.90..2.80） ---------- */
+let BATHROOM=null;
+(function(){
+  const X0=1.53, X1=4.02, Z0=3.82, Z1=6.34;
+  const g=new THREE.Group();
+  /* 淋浴湿区：东北角 1.10 × 1.16 */
+  const sx0=X1-1.12, sz0=Z1-1.18;
+  g.add(slab(1.12,0.07,1.18,M.stone,(sx0+X1)/2,0.035,(sz0+Z1)/2));      // 挡水石材基座
+  const gS=new THREE.Mesh(new THREE.PlaneGeometry(1.12,2.06), M.frosted);
+  gS.position.set((sx0+X1)/2,1.06,sz0); g.add(gS);                       // 南向玻璃
+  const gW=new THREE.Mesh(new THREE.PlaneGeometry(1.18,2.06), M.frosted);
+  gW.position.set(sx0,1.06,(sz0+Z1)/2); gW.rotation.y=Math.PI/2; g.add(gW); // 西向玻璃
+  g.add(slab(0.04,2.08,0.04,M.chrome,sx0,1.06,sz0));
+  g.add(slab(0.04,0.04,1.20,M.chrome,sx0,2.10,(sz0+Z1)/2));
+  g.add(slab(1.14,0.04,0.04,M.chrome,(sx0+X1)/2,2.10,sz0));
+  // 花洒：立杆 + 弯臂 + 顶喷 + 控制阀
+  const hx=X1-0.14, hz=Z1-0.20;
+  g.add(mesh(new THREE.CylinderGeometry(0.024,0.024,1.86,12),M.chrome,hx,0.95,hz));
+  const arm=mesh(new THREE.CylinderGeometry(0.02,0.02,0.42,10),M.chrome,hx,1.86,hz-0.20);
+  arm.rotation.x=Math.PI/2; g.add(arm);
+  g.add(mesh(new THREE.CylinderGeometry(0.115,0.115,0.028,22),M.chrome,hx,1.84,hz-0.40));
+  g.add(mesh(new THREE.CylinderGeometry(0.05,0.05,0.09,14),M.chrome,hx,1.20,hz));
+  // 壁龛置物
+  g.add(slab(0.30,0.02,0.16,M.stone,hx-0.02,1.42,hz-0.02));
+  /* 台盆柜：西墙 */
+  const vx=X0+0.30, vz=4.62;
+  g.add(slab(0.54,0.56,0.92,M.oak,vx,0.34,vz));
+  g.add(slab(0.58,0.045,0.96,M.marble,vx,0.64,vz));
+  g.add(mesh(new THREE.CylinderGeometry(0.19,0.145,0.13,26),M.porcelain,vx,0.72,vz));   // 台上盆
+  g.add(mesh(new THREE.CylinderGeometry(0.017,0.017,0.24,12),M.chrome,vx,0.79,vz-0.30)); // 龙头立柱
+  const sp=mesh(new THREE.CylinderGeometry(0.014,0.014,0.17,12),M.chrome,vx,0.91,vz-0.22);
+  sp.rotation.x=Math.PI/2; g.add(sp);                                                    // 出水口
+  const mir=new THREE.Mesh(new THREE.PlaneGeometry(0.92,0.86), M.mirror);
+  mir.position.set(X0-0.27,1.48,vz); mir.rotation.y=Math.PI/2; g.add(mir);
+  g.add(slab(0.03,0.02,0.96,M.metal,X0-0.26,1.94,vz));
+  g.add(contact(vx,vz,1.0,1.5,0.012));
+  /* 壁挂马桶：北墙偏西 */
+  const tx=2.30;
+  g.add(slab(0.46,0.66,0.16,M.wallG,tx,0.33,Z1-0.08));                 // 半高背板（藏水箱）
+  g.add(mesh(box(0.40,0.30,0.55,0.13),M.porcelain,tx,0.46,Z1-0.42));   // 便体
+  g.add(mesh(box(0.42,0.035,0.44,0.02),M.porcelain,tx,0.63,Z1-0.40));  // 座圈
+  g.add(slab(0.42,0.022,0.44,M.black,tx,0.655,Z1-0.40));               // 盖板
+  g.add(slab(0.18,0.02,0.12,M.chrome,tx,0.70,Z1-0.16));                // 冲水面板
+  /* 五金 */
+  const tb=mesh(new THREE.CylinderGeometry(0.016,0.016,0.62,10),M.chrome,X1-0.06,1.30,4.30);
+  tb.rotation.x=Math.PI/2; g.add(tb);
+  g.add(mesh(box(0.05,0.66,0.34,0.03),M.towel,X1-0.11,1.00,4.30));      // 毛巾
+  const ring=mesh(new THREE.TorusGeometry(0.09,0.012,8,20),M.chrome,X0+0.02,0.62,5.60);
+  ring.rotation.y=Math.PI/2; g.add(ring);
+  /* 地垫 + 顶灯 */
+  const mat=mesh(new THREE.CylinderGeometry(0.36,0.36,0.024,26),M.rugBath,2.45,0.014,4.72);
+  mat.castShadow=false; g.add(mat);
+  const bl=new THREE.Mesh(new THREE.CylinderGeometry(0.10,0.10,0.02,18),M.emit);
+  bl.position.set(2.60,H-0.02,5.00); g.add(role(bl,'emit'));
+  pick(g,'浴室卫生间','功能空间 / WET ROOM','磨砂玻璃湿区 + 石材挡水基座；橡木浴室柜配大理石台面与台上盆，壁挂马桶便于清洁。', ['bath']);
+  BATHROOM = g;
+})();
+
+/* ---------- 17 衣帽间（侧翼西段，门洞 x 0.00..0.90） ---------- */
+let CLOSET=null;
+(function(){
+  const X0=-0.34, X1=1.33, Z0=3.82, Z1=6.34;
+  const g=new THREE.Group();
+  /* 西墙开放衣柜系统：立柱 + 层板 + 挂杆 */
+  const bays=4, bd=(Z1-Z0-0.08)/bays, wx=X0+0.28;
+  for(let i=0;i<=bays;i++){
+    const z=Z0+0.04+i*bd;
+    g.add(slab(0.54,H-0.06,0.04,M.oak,wx,(H-0.06)/2,z));
+  }
+  for(let i=0;i<bays;i++){
+    const cz=Z0+0.04+bd*(i+0.5), inZ=bd-0.10;
+    g.add(slab(0.54,0.03,inZ,M.oak,wx,H-0.58,cz));       // 被褥格层板
+    g.add(slab(0.54,0.03,inZ,M.oak,wx,H-1.12,cz));       // 挂衣上限板
+    const rod=mesh(new THREE.CylinderGeometry(0.017,0.017,inZ,10),M.chrome,wx+0.02,1.76,cz);
+    rod.rotation.x=Math.PI/2; g.add(rod);
+    // 挂衣：肩宽沿 x（柜深方向），厚度沿 z（沿杆排列）
+    const nG=4+(i%2);
+    for(let k=0;k<nG;k++){
+      const zz=cz-inZ/2+(k+0.5)*inZ/nG;
+      const col=BOOK_COLORS[(i*5+k*3)%BOOK_COLORS.length];
+      const cloth=new THREE.MeshStandardMaterial({ map:T(LINEN,1,1), bumpMap:T(LINENB,1,1),
+        bumpScale:.012, color:col, roughness:.95 });
+      const hh=0.66+((i+k)%3)*0.18;
+      const body=mesh(box(0.34,hh,0.075,0.035), cloth, wx+0.02, 1.72-hh/2, zz);
+      body.rotation.y=0.05*((k%2)?1:-1); g.add(body);
+      const hk=mesh(new THREE.TorusGeometry(0.032,0.006,6,14,Math.PI*1.35), M.chrome, wx+0.02,1.775,zz);
+      hk.rotation.y=Math.PI/2; g.add(hk);
+    }
+    // 被褥格内容物
+    if(i%2===0) g.add(mesh(box(0.44,0.36,inZ-0.14,0.06),M.fabric,wx,H-0.38,cz));
+    else { g.add(mesh(box(0.42,0.24,inZ-0.16,0.02),M.paper,wx,H-0.44,cz));
+           g.add(mesh(box(0.42,0.10,inZ-0.16,0.02),M.dark,wx,H-0.27,cz)); }
+    // 底部抽屉柜
+    g.add(slab(0.50,0.54,inZ,M.fabric,wx,0.27,cz));
+    for(let d=0;d<2;d++) g.add(slab(0.02,0.05,0.22,M.metal,wx+0.26,0.16+d*0.22,cz));
+  }
+  /* 北墙：矮柜 + 大理石台面 + 圆镜 */
+  const cx2=0.72;
+  g.add(slab(0.86,0.60,0.42,M.oak,cx2,0.30,Z1-0.23));
+  g.add(slab(0.90,0.04,0.46,M.marble,cx2,0.62,Z1-0.23));
+  for(let i=0;i<2;i++) g.add(slab(0.02,0.05,0.24,M.metal,cx2-0.21+i*0.42,0.42,Z1-0.45));
+  const cm=new THREE.Mesh(new THREE.CircleGeometry(0.25,32), M.mirror);
+  cm.position.set(cx2,1.30,Z1-0.015); cm.rotation.y=Math.PI; g.add(cm);
+  g.add(mesh(new THREE.CylinderGeometry(0.05,0.06,0.16,16),M.ceramic,cx2+0.30,0.72,Z1-0.24));
+  /* 长凳 + 地毯 + 鞋 */
+  g.add(slab(0.42,0.06,0.94,M.oak,X1-0.28,0.42,4.92));
+  for(const dz of [-0.40,0.40]) g.add(slab(0.05,0.42,0.05,M.dark,X1-0.28,0.21,4.92+dz));
+  const rg=mesh(box(0.74,0.022,1.44,0.01),M.rug,0.62,0.012,4.95);
+  rg.castShadow=false; g.add(rg);
+  for(let i=0;i<3;i++){
+    const sm=new THREE.MeshStandardMaterial({color:[0x3a3733,0x8a6a4a,0xd8cfc0][i],roughness:.55});
+    for(const s of [-1,1]) g.add(mesh(box(0.11,0.075,0.27,0.035), sm, X1-0.28+s*0.10, 0.037, 4.28+i*0.26));
+  }
+  const cl=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.09,0.02,18),M.emit);
+  cl.position.set(0.5,H-0.02,5.05); g.add(role(cl,'emit'));
+  g.add(contact(X1-0.28,4.92,0.8,1.4,0.012));
+  pick(g,'步入式衣帽间','功能空间 / WALK-IN','橡木开放格架 + 金属挂杆，被褥格、布艺抽屉柜与换鞋长凳分区明确，动线直通主厅。', ['closet']);
+  CLOSET = g;
+})();
+
+/* ---------- 灯光 ---------- */
+const hemi = new THREE.HemisphereLight(0xf2eee6, 0xb9a891, 1.0); scene.add(hemi);
+const amb  = new THREE.AmbientLight(0xffffff, 0.2); scene.add(amb);
+// 窗外主光：穿过窗洞投影（顶棚/墙为单面朝内，不挡光）
+const sun = new THREE.DirectionalLight(0xfff2df, 2.3);
+sun.position.set(-1.0, 4.0, -9.0); sun.target.position.set(0.6, 0.5, 1.6);
+sun.castShadow = true; sun.shadow.mapSize.set(1024,1024);
+sun.shadow.camera.left=-6; sun.shadow.camera.right=6;
+sun.shadow.camera.top=5.5; sun.shadow.camera.bottom=-2.5;
+sun.shadow.camera.near=1; sun.shadow.camera.far=24;
+sun.shadow.bias=-0.0008; sun.shadow.normalBias=0.03;
+scene.add(sun, sun.target);
+// 室内补光（无投影，避免二次遮挡）
+const fill = new THREE.DirectionalLight(0xfff8ee, 0.75);
+fill.position.set(6,4.5,6); scene.add(fill);
+const fill2 = new THREE.DirectionalLight(0xf0f4ff, 0.3);
+fill2.position.set(-5,3,4); scene.add(fill2);
+const bounce = new THREE.PointLight(0xffe2bd, 0.3, 9, 2);
+bounce.position.set(0.6, 1.1, 0.6); scene.add(bounce);
+
+/* ---------- 材质环境反射统一 ---------- */
+scene.traverse(o=>{ if(o.isMesh && o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = 0.5; });
+
+/* ---------- 交互：拾取 ---------- */
+const ray = new THREE.Raycaster();
+const ptr = new THREE.Vector2();
+const card = document.getElementById('card');
+const dot = document.getElementById('dot');
+let selected = null;
+// three 的 Raycaster 不检查 visible，自行过滤隐藏物体
+function visibleUp(o){ let p=o; while(p){ if(p.visible===false) return false; p=p.parent; } return true; }
+
+function infoOf(o){ let p=o; while(p){ if(p.userData.info) return p.userData.info; p=p.parent; } return null; }
+function tint(root, on){
+  root.traverse(o=>{
+    if(!o.isMesh || !o.userData.orig || !o.material.emissive) return;
+    if(on){ o.material.emissive.setHex(0x2f6bff); o.material.emissiveIntensity = 0.42; }
+    else { o.material.emissive.setHex(o.userData.orig.emissive); o.material.emissiveIntensity = o.userData.orig.intensity; }
+  });
+}
+function select(root, fromList){
+  if(selected && selected!==root) tint(selected,false);
+  if(selected===root){ deselect(); return; }
+  selected = root; tint(root,true);
+  const i = root.userData.info;
+  document.getElementById('cardK').textContent = i.tag;
+  document.getElementById('cardN').textContent = i.name;
+  document.getElementById('cardD').textContent = i.desc;
+  card.classList.add('show'); dot.classList.add('show');
+  document.getElementById('tip').style.opacity = 0;
+  setAct(root.userData.toggle ? (root.userData.toggle==='tv' ? '双击屏幕 → 开/关机' : '双击灯罩 → 开/关灯') : '');
+  document.querySelectorAll('.chip').forEach(c=>c.classList.toggle('on', c.dataset.n===i.name));
+}
+let actTimer = null;
+function setAct(text){
+  const el = document.getElementById('cardAct');
+  el.textContent = text; el.classList.toggle('show', !!text);
+}
+function flashAction(root, label){
+  if(selected !== root) select(root);
+  const el = document.getElementById('cardAct');
+  el.textContent = (root.userData.info.name.slice(0,6) + '：' + label);
+  el.classList.add('show');
+  clearTimeout(actTimer);
+  actTimer = setTimeout(()=>setAct(root.userData.toggle==='tv'?'双击屏幕 → 开/关机':'双击灯罩 → 开/关灯'), 1400);
+}
+function deselect(){
+  if(selected) tint(selected,false);
+  selected=null; card.classList.remove('show'); dot.classList.remove('show');
+  setAct('');
+  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+}
+function castAt(cx,cy){
+  ptr.set(((cx-RLEFT)/VW)*2-1, -((cy-RTOP)/VH)*2+1);
+  ray.setFromCamera(ptr, camera);
+  const list = (mode==='room' && currentZone)
+    ? pickables.filter(pk=>inZone(pk.userData.info, currentZone)) : pickables;
+  const hits = ray.intersectObjects(list, true).filter(h=>visibleUp(h.object));
+  return hits.length ? infoOf(hits[0].object) : null;
+}
+const _hit = new THREE.Vector3();
+function castZone(cx,cy){
+  ptr.set(((cx-RLEFT)/VW)*2-1, -((cy-RTOP)/VH)*2+1);
+  ray.setFromCamera(ptr, camera);
+  return ray.ray.intersectPlane(FLOOR_PLANE, _hit) ? zoneAtPoint(_hit) : null;
+}
+// 拉到很远时整个平面只剩几十像素，手指点不准 → 允许 48px（约一根指宽）容差，就近进入最近的空间
+const _pc = new THREE.Vector3();
+const QUAD = [];
+function planQuad(){
+  let x0=1e9, x1=-1e9, z0=1e9, z1=-1e9;
+  for(const q of ZONES){ const [a,b,c,d]=q.rect;
+    x0=Math.min(x0,a); x1=Math.max(x1,b); z0=Math.min(z0,c); z1=Math.max(z1,d); }
+  QUAD.length=0;
+  for(const [x,z] of [[x0,z0],[x1,z0],[x1,z1],[x0,z1]]){
+    _pc.set(x,0,z).project(camera);
+    if(_pc.z>1) return false;
+    QUAD.push(RLEFT+(_pc.x*0.5+0.5)*VW, RTOP+(-_pc.y*0.5+0.5)*VH);
+  }
+  return true;
+}
+function insideQuad(cx,cy){
+  let sign=0;
+  for(let i=0;i<4;i++){
+    const ax=QUAD[i*2], ay=QUAD[i*2+1], j=(i+1)%4;
+    const cr=(QUAD[j*2]-ax)*(cy-ay) - (QUAD[j*2+1]-ay)*(cx-ax);
+    if(Math.abs(cr)<1e-9) continue;
+    const s=cr>0?1:-1;
+    if(sign===0) sign=s; else if(s!==sign) return false;
+  }
+  return true;
+}
+function distToQuad(cx,cy){
+  let best=1e9;
+  for(let i=0;i<4;i++){
+    const ax=QUAD[i*2], ay=QUAD[i*2+1], j=(i+1)%4;
+    const dx=QUAD[j*2]-ax, dy=QUAD[j*2+1]-ay, L=dx*dx+dy*dy;
+    let t = L ? ((cx-ax)*dx+(cy-ay)*dy)/L : 0;
+    t = Math.max(0, Math.min(1, t));
+    best = Math.min(best, Math.hypot(cx-ax-t*dx, cy-ay-t*dy));
+  }
+  return best;
+}
+function zoneNear(cx,cy){
+  if(!planQuad()) return null;
+  if(!insideQuad(cx,cy) && distToQuad(cx,cy) > 48) return null;
+  let best=null, bd=1e9;
+  for(const z of ZONES){
+    const [x0,x1,z0,z1]=z.rect;
+    _pc.set((x0+x1)/2, z.y, (z0+z1)/2).project(camera);
+    if(_pc.z>1) continue;
+    const d=Math.hypot(RLEFT+(_pc.x*0.5+0.5)*VW-cx, RTOP+(-_pc.y*0.5+0.5)*VH-cy);
+    if(d<bd){ bd=d; best=z; }
+  }
+  return best;
+}
+function zonePick(cx,cy){ return castZone(cx,cy) || zoneNear(cx,cy); }
+let down=null;
+// 双击（两次快速轻点，同一物体）→ 开关类物件开/关
+let lastTap = { root:null, t:-1e9, x:0, y:0 };
+canvas.addEventListener('pointerdown', e=>{ down={x:e.clientX,y:e.clientY,t:performance.now()}; });
+canvas.addEventListener('pointerup', e=>{
+  if(!down) return;
+  const moved = Math.hypot(e.clientX-down.x, e.clientY-down.y);
+  const quick = moved<7 && performance.now()-down.t<700;
+  if(quick){
+    const now = performance.now();
+    const dbl = lastTap.root && (now-lastTap.t<420) &&
+                Math.hypot(e.clientX-lastTap.x, e.clientY-lastTap.y)<24;
+    if(mode === 'overview'){
+      const z = zonePick(e.clientX,e.clientY);
+      if(z) enterRoom(z);
+      lastTap.root = null;
+    } else {
+      const i = castAt(e.clientX,e.clientY);
+      if(i){
+        if(dbl && i.root === lastTap.root && i.root.userData.toggle){
+          const label = toggleAction(i.root);
+          if(label) flashAction(i.root, label);
+          lastTap.root = null;              // 消费掉，避免三连击反复切换
+        } else {
+          select(i.root);
+          lastTap = { root:i.root, t:now, x:e.clientX, y:e.clientY };
+        }
+      } else { deselect(); lastTap.root = null; }
+    }
+  }
+  down=null;
+});
+if(matchMedia('(hover:hover)').matches){
+  canvas.addEventListener('pointermove', e=>{
+    if(mode === 'overview'){
+      const z = zonePick(e.clientX,e.clientY);
+      if(z !== hoveredZone) { setZoneHover(z); }
+      canvas.style.cursor = z ? 'pointer' : 'grab';
+      return;
+    }
+    canvas.style.cursor = castAt(e.clientX,e.clientY) ? 'pointer' : 'grab';
+  });
+}
+
+/* ---------- 视角动画 ---------- */
+const cam = { from:new THREE.Vector3(), to:new THREE.Vector3(), tfrom:new THREE.Vector3(), tto:new THREE.Vector3(), t:1 };
+function flyTo(px,py,pz, tx,ty,tz){
+  cam.from.copy(camera.position); cam.to.set(px,py,pz);
+  cam.tfrom.copy(controls.target); cam.tto.set(tx,ty,tz); cam.t=0;
+}
+function tickCam(dt){
+  if(cam.t>=1) return;
+  cam.t = Math.min(1, cam.t + dt*1.15);
+  const k = cam.t<.5 ? 4*cam.t**3 : 1-Math.pow(-2*cam.t+2,3)/2;
+  camera.position.lerpVectors(cam.from,cam.to,k);
+  controls.target.lerpVectors(cam.tfrom,cam.tto,k);
+}
+function focusOn(root){
+  const b = new THREE.Box3().setFromObject(root);
+  const c = b.getCenter(new THREE.Vector3()), s = b.getSize(new THREE.Vector3());
+  const r = Math.max(s.x,s.y,s.z);
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  const p = c.clone().add(dir.multiplyScalar(Math.max(1.5, r*2.6))).setY(Math.max(c.y+r*0.75, 0.7));
+  flyTo(p.x,p.y,p.z, c.x,c.y,c.z);
+}
+
+/* ---------- UI ---------- */
+// 模型整体包围盒（含底座），用于自适应全景
+const MODEL = new THREE.Box3();
+scene.traverse(o=>{ if(o.isMesh && o!==sky) MODEL.expandByObject(o); });
+const MC = MODEL.getCenter(new THREE.Vector3());
+
+// 精确取景：把包围盒 8 个角点投影到相机基，求刚好框住所需的最小距离
+function frameDist(box, target, dir, pad=1.1){
+  const D = dir.clone().normalize();
+  const right = new THREE.Vector3().crossVectors(camera.up, D).normalize();
+  const up = new THREE.Vector3().crossVectors(D, right).normalize();
+  const vFov = camera.fov*Math.PI/180, tanV = Math.tan(vFov/2);
+  const tanH = tanV * Math.max(0.35, VW/Math.max(1,VH));
+  let need = 0;
+  for(const x of [box.min.x, box.max.x]) for(const y of [box.min.y, box.max.y]) for(const z of [box.min.z, box.max.z]){
+    const a = new THREE.Vector3(x,y,z).sub(target);
+    const az = a.dot(D);
+    need = Math.max(need, az + Math.abs(a.dot(right))/tanH, az + Math.abs(a.dot(up))/tanV);
+  }
+  return need * pad + 0.4;
+}
+const OVER_DIR = new THREE.Vector3(0.45, 0.95, 0.78).normalize();  // ≈50° 轴测俯视
+function fitAll(){
+  const t = MC.clone();
+  const d = frameDist(MODEL, t, OVER_DIR, 1.10);
+  return { p: t.clone().add(OVER_DIR.clone().multiplyScalar(d)), t, d };
+}
+function applyFit(){ const { p, t } = fitAll(); flyTo(p.x,p.y,p.z, t.x,t.y,t.z); }
+// 室内机位：目标点固定，位置按视口比例沿视线外推，窄屏不会被裁掉
+function indoorView(pos, tgt, need){
+  const a = Math.max(0.35, VW/Math.max(1,VH));
+  const vFov = camera.fov*Math.PI/180;
+  const hFov = 2*Math.atan(Math.tan(vFov/2)*a);
+  const k = need / (2*Math.tan(Math.min(vFov,hFov)/2));
+  const P = new THREE.Vector3(...pos), T = new THREE.Vector3(...tgt);
+  const dir = P.clone().sub(T);
+  const len = Math.max(dir.length(), Math.min(k, 14));
+  return P.copy(T).add(dir.normalize().multiplyScalar(len));
+}
+
+/* ---------- 分层导航：全屋俯瞰 ⇄ 单房间 ---------- */
+let mode = 'overview', inFit = true, currentZone = null;
+const bReset = document.getElementById('bReset');
+const btns = document.querySelector('.btns');
+const chips = document.getElementById('chips');
+const zoneBtns = new Map();
+function fillChips(list){
+  while(chips.firstChild) chips.removeChild(chips.firstChild);
+  for(const c of list) chips.appendChild(c);
+}
+
+function setZoneHover(z){
+  for(const q of ZONES){
+    const on = (q === z);
+    q.plate.material.opacity = on ? 0.2 : 0.06;
+    q.edge.material.opacity  = on ? 1.0 : 0.45;
+    q.label.material.opacity = on ? 1.0 : 0.82;
+  }
+  hoveredZone = z;
+}
+function showZones(on){
+  for(const q of ZONES) q.group.visible = on;
+  if(!on) hoveredZone = null;
+}
+function enterRoom(z){
+  mode = 'room';
+  currentZone = z.id;
+  document.getElementById('sub').textContent = '当前：' + z.name + ' — 点击家具查看名称';
+  deselect();
+  showZones(false);
+  roofGroup.visible = !z.doll;                    // 小房间沿用娃娃屋剖切，从上方看进去
+  sky.visible = !z.doll;                          // 室内需要窗外天光板（大房间）
+  let p, tgt;
+  if(z.doll){
+    // 娃娃屋机位：俯视斜切进入小房间，用包围盒 8 角点精确取景
+    const [x0,x1,z0,z1] = z.rect;
+    const bb = new THREE.Box3(new THREE.Vector3(x0, 0, z0), new THREE.Vector3(x1, 2.35, z1));
+    tgt = new THREE.Vector3(...z.view.tgt);
+    const dir = new THREE.Vector3(...z.view.dir).normalize();
+    const d = frameDist(bb, tgt, dir, 1.06);
+    p = tgt.clone().add(dir.multiplyScalar(d));
+    controls.minDistance = 0.5; controls.maxDistance = 24;
+  } else {
+    p = indoorView(z.view.pos, z.view.tgt, z.view.need);
+    tgt = new THREE.Vector3(...z.view.tgt);
+    controls.minDistance = 0.6; controls.maxDistance = 120;
+  }
+  flyTo(p.x,p.y,p.z, tgt.x,tgt.y,tgt.z);
+  fillChips(pickables.filter(pk=>inZone(pk.userData.info, z.id)).map(pk=>{
+    const c=document.createElement('div'); c.className='chip';
+    c.textContent = pk.userData.info.name; c.dataset.n = pk.userData.info.name;
+    c.onclick=()=>{ select(pk); focusOn(pk); };
+    return c;
+  }));
+  bReset.textContent = '← 返回全屋';
+  zoneBtns.forEach((b,id)=>b.classList.toggle('on', id===z.id));
+  inFit = false;
+}
+function goOverview(){
+  mode = 'overview';
+  currentZone = null;
+  document.getElementById('sub').textContent = 'WARM MINIMAL LIVING ROOM — 全屋俯瞰';
+  deselect();
+  roofGroup.visible = false;                      // 娃娃屋剖切：直接看进各房间
+  sky.visible = false;                            // 俯瞰不需要窗外天光板
+  showZones(true); setZoneHover(null);
+  controls.minDistance = 4; controls.maxDistance = 320;
+  applyFit();
+  fillChips(ZONES.map(z=>{
+    const c=document.createElement('div'); c.className='chip'; c.textContent='▸ '+z.name;
+    c.onclick=()=>enterRoom(z);
+    return c;
+  }));
+  bReset.textContent = '复位';
+  zoneBtns.forEach(b=>b.classList.remove('on'));
+  inFit = true;
+}
+
+const VIEWS = [
+  ['全屋',       'overview', null],
+  ['会客区',     'living',   null],
+  ['地台阅读区', 'deck',     null],
+  ['影音墙',     'tv',       null],
+  ['浴室',       'bath',     null],
+  ['衣帽间',     'closet',   null],
+];
+for(const [label, key] of VIEWS){
+  const b=document.createElement('button'); b.className='btn'; b.textContent=label;
+  b.onclick=()=>{
+    if(key === 'overview') goOverview();
+    else { const z = ZONES.find(q=>q.id===key); if(z) enterRoom(z); }
+    zoneBtns.forEach((x,id)=>x.classList.toggle('on', id===key));
+  };
+  zoneBtns.set(key, b);
+  btns.appendChild(b);
+}
+bReset.onclick=()=>{ mode==='overview' ? applyFit() : goOverview(); };
+const bSpin=document.getElementById('bSpin');
+bSpin.onclick=()=>{ controls.autoRotate=!controls.autoRotate; bSpin.classList.toggle('on',controls.autoRotate); };
+
+let night=false;
+const bDay=document.getElementById('bDay');
+function setRole(role, hex, inten, except){
+  scene.traverse(o=>{
+    if(o.isMesh && o.userData.role===role && o.material.emissive){
+      if(except){ let p=o.parent, skip=false; while(p){ if(p===except){ skip=true; break; } p=p.parent; } if(skip) return; }
+      o.material.emissive.setHex(hex); o.material.emissiveIntensity=inten;
+      if(o.userData.orig){ o.userData.orig.emissive=hex; o.userData.orig.intensity=inten; }
+    }
+  });
+}
+bDay.onclick=()=>{
+  night=!night; bDay.textContent=night?'夜灯':'日光'; bDay.classList.toggle('on',night);
+  hemi.intensity = night?0.16:1.0; amb.intensity = night?0.05:0.2;
+  sun.intensity = night?0.05:2.3; fill.intensity = night?0.06:0.75;
+  fill2.intensity = night?0.03:0.3; bounce.intensity = night?0.1:0.3;
+  // 天花灯带/射灯受日光开关控制；落地灯与电视由手动开关优先
+  setRole('shade', 0xffe6c0, night?1.5:0.12, LAMP);
+  setRole('emit',  0xfff3dd, night?3.6:2.2, LAMP);
+  applyLamp(); applyTv();
+  scene.background.set(night?0x161a1e:0xe9e5df);
+  scene.fog.color.copy(scene.background);
+  sky.material.color.set(night?0x242a31:0xffffff);
+  if(selected) tint(selected,true);
+};
+document.getElementById('cardFocus').onclick=()=>{ if(selected) focusOn(selected); };
+document.getElementById('cardClose').onclick=deselect;
+
+
+/* ---------- 循环 ---------- */
+let last=performance.now();
+const _v=new THREE.Vector3();
+function loop(now){
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+  tickCam(dt); controls.update(); clampTarget();
+  if(selected){
+    const b=new THREE.Box3().setFromObject(selected);
+    b.getCenter(_v); _v.project(camera);
+    const vis = _v.z<1;
+    dot.style.opacity = vis?1:0;
+    if(vis) dot.style.transform=`translate(${(_v.x*.5+.5)*VW+RLEFT}px, ${(-_v.y*.5+.5)*VH+RTOP}px)`;
+  }
+  renderer.render(scene,camera);
+}
+renderer.setAnimationLoop(loop);
+
+/* ---------- 初始状态：全屋俯瞰 ---------- */
+{ const { p, t } = fitAll(); camera.position.copy(p); controls.target.copy(t); }
+roofGroup.visible = false;
+controls.minDistance = 4; controls.maxDistance = 320;
+fillChips(ZONES.map(z=>{
+  const c=document.createElement('div'); c.className='chip'; c.textContent='▸ '+z.name;
+  c.onclick=()=>enterRoom(z); return c;
+}));
+zoneBtns.get('overview').classList.add('on');
+controls.addEventListener('start', ()=>{ inFit = false; });
+
+/* 全屋模式下限制平移范围：户型永远拖不出视野，也就不存在"丢了画面"的死角 */
+function clampTarget(){
+  if(mode !== 'overview') return;
+  const t = controls.target, m = 1.5;
+  const cx = Math.min(MODEL.max.x + m, Math.max(MODEL.min.x - m, t.x));
+  const cy = Math.min(MODEL.max.y + m, Math.max(-0.6, t.y));
+  const cz = Math.min(MODEL.max.z + m, Math.max(MODEL.min.z - m, t.z));
+  if(cx===t.x && cy===t.y && cz===t.z) return;
+  const dx = cx - t.x, dy = cy - t.y, dz = cz - t.z;
+  t.set(cx, cy, cz);
+  camera.position.x += dx; camera.position.y += dy; camera.position.z += dz;  // 相机跟随，画面不跳
+}
+
+function onViewportChange(){
+  const pw=VW, ph=VH;
+  measure();
+  if(Math.abs(pw-VW)<1.5 && Math.abs(ph-VH)<1.5) return;
+  camera.aspect=VW/VH; camera.updateProjectionMatrix();
+  renderer.setSize(VW,VH,false);
+  if(inFit && mode==='overview'){ const { p, t } = fitAll(); camera.position.copy(p); controls.target.copy(t); }
+}
+addEventListener('resize', onViewportChange, {passive:true});
+if(window.visualViewport){
+  window.visualViewport.addEventListener('resize', onViewportChange);
+  window.visualViewport.addEventListener('scroll', onViewportChange);
+}
+
+// 预热一帧后收起 loading
+renderer.render(scene,camera);
+requestAnimationFrame(()=>document.getElementById('load').classList.add('gone'));
+setTimeout(()=>{ const t=document.getElementById('tip'); if(t) t.style.opacity=0; }, 6000);
+</script>
+</body>
+</html>
