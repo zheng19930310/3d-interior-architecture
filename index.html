@@ -67,7 +67,38 @@
   #load .b i{display:block;height:100%;width:35%;background:#22201d;border-radius:2px;animation:slide 1.1s infinite}
   @keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(430%)}}
   #load p{font-size:12px;letter-spacing:2px;opacity:.55}
-  @media (max-width:420px){#card{left:10px;right:10px;max-width:none}}
+
+  /* 书本操作条：书抽出后浮现在画面下方 */
+  #book{position:fixed;left:50%;bottom:calc(58px + env(safe-area-inset-bottom));transform:translate(-50%,10px);
+    z-index:7;display:flex;flex-direction:column;align-items:center;gap:7px;opacity:0;pointer-events:none;
+    transition:.26s cubic-bezier(.2,.8,.3,1)}
+  #book.show{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+  #book .bar{display:flex;align-items:center;gap:6px;padding:7px 9px;border-radius:999px;
+    background:rgba(252,251,249,.92);backdrop-filter:blur(14px);border:1px solid rgba(34,32,29,.1);
+    box-shadow:0 8px 24px rgba(40,34,26,.16)}
+  #book .tt{font-size:12px;font-weight:660;padding:0 4px;max-width:34vw;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  #book .at{font-size:10.5px;opacity:.5;padding-right:2px}
+  #book .b{border:1px solid rgba(34,32,29,.16);border-radius:999px;background:rgba(255,255,255,.6);
+    padding:6px 10px;font-size:11.5px;cursor:pointer;font-family:inherit;color:#22201d;white-space:nowrap}
+  #book .b:active{transform:scale(.96)}
+  #book .b.hi{background:#22201d;color:#f3efe9;border-color:#22201d}
+  #bkPick{display:none;flex-direction:column;gap:6px;padding:9px 11px;border-radius:14px;
+    background:rgba(252,251,249,.94);backdrop-filter:blur(14px);border:1px solid rgba(34,32,29,.1);
+    box-shadow:0 10px 28px rgba(40,34,26,.18);max-width:88vw}
+  #bkPick.show{display:flex}
+  #bkPick .lb{font-size:10px;letter-spacing:.8px;opacity:.5;text-transform:uppercase}
+  #bkPick .grp{display:flex;flex-wrap:wrap;gap:5px}
+  #bkPick .bk{border:1px solid rgba(34,32,29,.16);border-radius:8px;background:rgba(255,255,255,.7);
+    min-width:30px;padding:5px 7px;font-size:11.5px;cursor:pointer;font-family:inherit;color:#22201d}
+  #bkPick .bk.on{background:#22201d;color:#f3efe9;border-color:#22201d}
+  #bkPick .hint{font-size:11px;opacity:.62;line-height:1.5}
+  #bkPick .row{display:flex;gap:6px;justify-content:flex-end;margin-top:2px}
+  #bkPick .mini{border:1px solid rgba(34,32,29,.16);border-radius:8px;padding:5px 10px;font-size:11.5px;
+    background:rgba(255,255,255,.7);cursor:pointer;font-family:inherit;color:#22201d}
+  #bkPick .mini.go{background:#22201d;color:#f3efe9;border-color:#22201d}
+  @media (max-width:420px){#card{left:10px;right:10px;max-width:none}
+    #book .tt{max-width:26vw}}
 </style>
 </head>
 <body>
@@ -93,6 +124,24 @@
     <button class="mini" id="cardClose">关闭</button>
   </div>
   <div class="act" id="cardAct"></div>
+</div>
+
+<!-- 书本操作条：抽出某本书后出现 -->
+<div id="book">
+  <div id="bkPick">
+    <div class="lb">插到第几层</div>
+    <div class="grp" id="bkRows"></div>
+    <div class="lb">该层第几个位置</div>
+    <div class="grp" id="bkSlots"></div>
+    <div class="hint" id="bkHint"></div>
+    <div class="row"><button class="mini" id="bkNo">取消</button><button class="mini go" id="bkGo">插回这里</button></div>
+  </div>
+  <div class="bar">
+    <span class="tt" id="bkTitle">—</span><span class="at" id="bkAt"></span>
+    <button class="b hi" id="bkOpen">展开书本</button>
+    <button class="b" id="bkBack">放回书架</button>
+    <button class="b" id="bkMove">更换书本位置</button>
+  </div>
 </div>
 
 <div class="hud bot">
@@ -508,12 +557,50 @@ function tickTweens(dt){
     if(w.e>=w.d) TWEENS.splice(i,1);
   }
 }
+/* ---------- 交互：姿态补间 / 延时回调 / 朝向求解 ---------- */
+// 四元数补间（抽出、归位等转向动作用它，避免欧拉序造成的姿态跳变）
+const FACES = [];
+function face(m, to, dur=0.4){
+  for(let i=FACES.length-1;i>=0;i--) if(FACES[i].o===m) FACES.splice(i,1);
+  if(dur<=0){ m.quaternion.copy(to); return; }
+  FACES.push({ o:m, from:m.quaternion.clone(), to:to.clone(), d:dur, e:0 });
+}
+function tickFaces(dt){
+  for(let i=FACES.length-1;i>=0;i--){
+    const w=FACES[i]; w.e=Math.min(w.d, w.e+dt);
+    const k=w.e/w.d, s=k<.5?2*k*k:1-Math.pow(-2*k+2,2)/2;
+    w.o.quaternion.slerpQuaternions(w.from, w.to, s);
+    if(w.e>=w.d) FACES.splice(i,1);
+  }
+}
+// 与补间同步的延时回调（不用 setTimeout，动画不会和真实时间脱节）
+const AFTERS = [];
+function after(sec, fn){ AFTERS.push({ t:sec, fn }); }
+function tickAfters(dt){
+  for(let i=AFTERS.length-1;i>=0;i--){
+    const a=AFTERS[i]; a.t-=dt;
+    if(a.t<=0){ AFTERS.splice(i,1); try{ a.fn(); }catch(e){ console.warn(e); } }
+  }
+}
+// 求一个旋转：让物体的本地 +z 指向"从 world 看 eye 的方向"，且尽量保持 up 朝上
+const _UP = new THREE.Vector3(0,1,0);
+function faceToQ(world, eye){
+  const d=new THREE.Vector3().subVectors(eye, world);
+  if(d.lengthSq()<1e-8) d.set(0,0,1);
+  d.normalize();
+  if(Math.abs(d.y)>0.999) d.y=Math.sign(d.y)*0.999, d.normalize();
+  const x=new THREE.Vector3().crossVectors(_UP, d).normalize();
+  if(x.lengthSq()<1e-8) x.set(1,0,0);
+  const y=new THREE.Vector3().crossVectors(d, x).normalize();
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x,y,d));
+}
 // 给单个网格挂上"点一下就有反应"的行为：fn 返回一段提示文字
 function act(o, fn){ o.userData.act = { fn }; return o; }
 /* ---------- 对外 API 支撑：部件注册表 + 事件总线 ----------
    每个可互动部件用字符串 id 寻址，set/get 幂等，便于外部集成调用 */
 const PARTS = new Map();
 const BOOKS = [];
+let SHELF = null;                    // 书架交互句柄（书架构建时赋值）
 const _listeners = new Map();
 function emit(ev, data){
   const l=_listeners.get(ev); if(l) for(const f of l){ try{ f(data); }catch(e){ console.warn('[Room3D] listener error', e); } }
@@ -787,7 +874,7 @@ function zoneAtPoint(pt){
   pick(g,'木百叶帘','软装 / SOFT FURNISHING','木色横向百叶，过滤直射光，让地台区保持柔和的漫射亮度。', ['deck'], 'blinds');
 })();
 
-// 3 木质书架（分层 + 真实摆书：竖排、斜靠、平摞、横放）
+// 3 木质书架（分层 + 真实摆书：抽到视觉正面 → 展开细看 → 合并 / 放回 / 换位重排）
 (function(){
   const g=new THREE.Group();
   const W=0.42, Hh=2.05, L=1.7, rows=5;
@@ -800,47 +887,270 @@ function zoneAtPoint(pt){
   for(let i=0;i<=rows;i++){
     const y=0.02+i*(Hh-0.06)/rows;
     shelfY.push(y);
-    const s=slab(W-0.06,0.035,L-0.06,M.oak,0,y,0);
-    g.add(s);
+    g.add(slab(W-0.06,0.035,L-0.06,M.oak,0,y,0));
   }
-  // 每层净高
-  const gapY=(Hh-0.06)/rows;
+  const MARGIN=0.10, GAP=0.007, CAP=L-2*MARGIN;                    // 每层可用长度
   let seed=7;
   const rnd=()=>{ seed=(seed*1103515245+12345)&0x7fffffff; return seed/0x7fffffff; };
   const bookMat=(col)=>new THREE.MeshStandardMaterial({ color:col, roughness:.78 });
   const TITLES=['空间的光','静物与白','住宅本质','材料的诚实','光影集','柔光','极简主义','造物','室外的房间','尺寸与比例','手作的温度','灰度','窗的知识','坐具论','陶与土','日常的诗意','阴翳礼赞','构筑文化','家的构造','留白'];
+
+  /* ---------------- 分层数据模型 ----------------
+     ROWS[i] = { i, y0, units:[unit] }   每层由若干"占位单元"顺序排布
+     unit    = { kind:'v'|'flat'|'prop', items:[rec…] }
+     rec     = { id,title,mesh,row,unit, len(占层长度), thk(书厚),
+                 rw/rh/rt(封面两向/书厚), home, state }
+     state   = 'shelved' | 'pulled' | 'open'                            */
+  const ROWS=[];
+  for(let i=0;i<rows;i++) ROWS.push({ i, y0:shelfY[i]+0.018, units:[] });
+  const REC=[];
   let bookNo=0;
-  const PULL=0.20;                       // 抽出距离（沿 +x，即书架开口方向）
-  // 把一本书变成可点击互动的个体：抽出/归位 + 外沿微微下垂
-  function bookable(b, lean){
-    const base=b.position.x, bz=b.rotation.z;
-    const title=TITLES[bookNo%TITLES.length]; const idx=bookNo++;
-    let out=false;
-    b.userData.open=false;
-    const pid = 'book-'+idx;
-    regPart(pid, { item:'shelf', kind:'switch',
-      get:()=>out,
-      set:v=>{ out=!!v; b.userData.open=out;
-               tween(b.position,'x', out? base+PULL : base, .32);
-               tween(b.rotation,'z', out? bz+lean : bz, .32);
-               return out; },
-      label:v=>(v?'抽出《':'归位《')+title+'》' });
-    BOOKS.push({ id:pid, index:idx, title, mesh:b });
-    return act(b, ()=>runPart(pid));
+
+  const unitLen=(u)=> u.kind==='v' ? u.items[0].len
+                   : u.kind==='flat' ? Math.max(...u.items.map(b=>b.len))
+                   : u.w0;
+  const naturalLen=(row)=> row.units.reduce((s,u)=>s+unitLen(u),0) + GAP*Math.max(0,row.units.length-1);
+  const fits=(row)=> row.units.reduce((s,u)=>s+unitLen(u),0) <= CAP+1e-6;
+
+  function move(m,to,dur){
+    if(dur<=0){ m.position.set(to.x,to.y,to.z); return; }
+    tween(m.position,'x',to.x,dur); tween(m.position,'y',to.y,dur); tween(m.position,'z',to.z,dur);
   }
-  for(let r=0;r<rows;r++){
-    const y0=shelfY[r]+0.018;                       // 层板顶面
-    let z=-L/2+0.10;
-    const limit=L/2-0.10;
-    if(r===2){                                       // 中间一层：平摞书 + 器物
-      let h=y0;
-      for(let k=0;k<4;k++){
-        const th=0.028+rnd()*0.014;
-        const b=mesh(box(W-0.10,th,0.24+rnd()*0.05,0.004),
-          bookMat(BOOK_COLORS[(k*3+r)%BOOK_COLORS.length]), 0, h+th/2, -0.30);
-        b.rotation.y=(rnd()-0.5)*0.10; g.add(bookable(b, 0.05)); h+=th+0.002;
+  // 重排一层：按单元顺序累加 z，剩余空间用来收紧间隙（书本不会被推出书架）
+  function layout(row, animate=true, dur=.5){
+    const us=row.units;
+    if(!us.length) return true;
+    if(!fits(row)) return false;
+    const need=us.reduce((s,u)=>s+unitLen(u),0);
+    const gap = us.length>1 ? Math.min(GAP, (CAP-need)/(us.length-1)) : 0;
+    let z=-L/2+MARGIN;
+    for(const u of us){
+      const w=unitLen(u); u.z=z+w/2; z+=w+gap;
+      if(u.kind==='prop'){
+        if(animate) move(u.mesh,{ x:u.x, y:row.y0+u.hy, z:u.z },dur);
+        else u.mesh.position.set(u.x, row.y0+u.hy, u.z);
+        continue;
       }
-      g.add(mesh(new THREE.CylinderGeometry(0.055,0.075,0.16,16),M.ceramic,0,y0+0.08,0.34));
+      let h=row.y0;
+      for(const it of u.items){
+        it.home = u.kind==='v' ? { x:it.slotX, y:row.y0+it.rh/2, z:u.z }
+                               : { x:it.slotX, y:h+it.thk/2,     z:u.z };
+        h += u.kind==='flat' ? it.thk+0.002 : 0;
+        if(it.state==='shelved'){
+          if(animate){ move(it.mesh,it.home,dur); face(it.mesh,it.restQ,dur); }
+          else { it.mesh.position.set(it.home.x,it.home.y,it.home.z); it.mesh.quaternion.copy(it.restQ); }
+        }
+      }
+    }
+    return true;
+  }
+
+  /* ---------------- 展开本（面向视线的立体书） ----------------
+     书脊在本地 x=0，两半叶分别占 ±x；左半叶绕书脊从 −173°（合）转到 −9°（展开）。
+     整组 +z 恒指向相机，所以无论镜头在哪，书都是正面朝你打开的。          */
+  const OUT=0.62;                        // 抽出量：越过书架侧框(0.21) 再多出 0.41
+  const CLOSED=-Math.PI*0.96, OPENED=-0.16;
+  const READER=new THREE.Group(); READER.visible=false;
+  READER.position.set(0.35, Hh*0.55, 0);    // 待机位贴在架口前方，避免标签撑出过大的包围盒
+  g.add(READER);
+  const leafL=new THREE.Group(), leafR=new THREE.Group();
+  READER.add(leafL, leafR);
+  const PLATE=new THREE.BoxGeometry(1,1,1);
+  const COVER=new THREE.MeshStandardMaterial({ color:0x8d3b30, roughness:.62 });
+  const PAPER =new THREE.MeshStandardMaterial({ color:0xf4efe4, roughness:.9 });
+  const RULE  =new THREE.MeshStandardMaterial({ color:0xc0b7a6, roughness:.95 });
+  function plate(mat){
+    const m=new THREE.Mesh(PLATE,mat); m.castShadow=true; m.receiveShadow=true;
+    m.scale.setScalar(0.001);                 // 未上尺寸前收成一点，避免单位盒撑大包围盒
+    m.userData.shared=true; m.userData.noPick=true; return m;
+  }
+  const P={ cL:plate(COVER), pL:plate(PAPER), rL:plate(RULE),
+            cR:plate(COVER), pR:plate(PAPER), rR:plate(RULE), sp:plate(COVER) };
+  leafL.add(P.cL,P.pL,P.rL); leafR.add(P.cR,P.pR,P.rR); READER.add(P.sp);
+  // 书名标签（同一张画布重绘，避免每本书建纹理）
+  const LBC=cv(512,128), LBTEX=new THREE.CanvasTexture(LBC[0]);
+  LBTEX.colorSpace=THREE.SRGBColorSpace;
+  const lb=new THREE.Sprite(new THREE.SpriteMaterial({ map:LBTEX, transparent:true, depthTest:false, depthWrite:false }));
+  lb.scale.set(0.86,0.215,1); lb.renderOrder=21; lb.userData.shared=true; READER.add(lb);
+  function drawLabel(txt){
+    const x=LBC[1];
+    x.clearRect(0,0,512,128);
+    x.fillStyle='rgba(28,26,23,.8)';
+    const r=22; x.beginPath();
+    x.moveTo(r,14); x.lineTo(512-r,14); x.quadraticCurveTo(512,14,512,14+r);
+    x.lineTo(512,114-r); x.quadraticCurveTo(512,114,512-r,114);
+    x.lineTo(r,114); x.quadraticCurveTo(0,114,0,114-r); x.lineTo(0,14+r); x.quadraticCurveTo(0,14,r,14);
+    x.closePath(); x.fill();
+    x.fillStyle='#f5f1ea'; x.textAlign='center';
+    x.font='600 44px -apple-system,"PingFang SC","Noto Sans SC",sans-serif';
+    x.fillText(txt,256,78);
+    LBTEX.needsUpdate=true;
+  }
+  let activeId=null;                     // 当前展示中的书（全局唯一）
+
+  function bookWorld(rec,p){ return new THREE.Vector3(p.x+g.position.x, p.y+g.position.y, p.z+g.position.z); }
+  function pulledPos(rec){ const h=rec.home; return { x:h.x+OUT, y:h.y+rec.lift, z:h.z }; }
+  // 封面法线（立放 ±z / 平放 ±y）转向相机
+  function faceOf(rec, p){
+    const w=bookWorld(rec,p);
+    const q=faceToQ(w, camera.position);
+    if(rec.flat) q.multiply(FLAT_ALIGN);
+    return q;
+  }
+  const FLAT_ALIGN=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), Math.PI/2);
+
+  function sizeReader(rec){
+    COVER.color.setHex(rec.col);
+    const hw=rec.rw/2, bh=rec.rh, tc=Math.max(0.014, rec.rt);
+    for(const [leaf,cM,pM,rM,sgn] of [[leafL,P.cL,P.pL,P.rL,-1],[leafR,P.cR,P.pR,P.rR,1]]){
+      leaf.position.set(0,0,0);                                   // 铰链落在书脊上
+      cM.scale.set(hw, bh, 0.007);            cM.position.set(sgn*hw/2, 0, -tc*0.30);
+      pM.scale.set(hw*0.95, bh*0.96, tc*0.40); pM.position.set(sgn*hw/2, 0, tc*0.06);
+      rM.scale.set(hw*0.66, 0.004, tc*0.44);   rM.position.set(sgn*hw*0.40, bh*0.26, tc*0.28);
+    }
+    P.sp.scale.set(0.022, bh, tc*0.7); P.sp.position.set(0,0,0);
+    lb.position.set(0, bh/2+0.15, 0.03);
+  }
+  function aimReader(rec, at){
+    if(!rec) return;
+    // 展开面法线（本地 +z）严格指向相机：镜头在哪，书就朝哪翻开
+    READER.quaternion.copy(faceToQ(bookWorld(rec, at||READER.position), camera.position));
+  }
+  // 抽出 + 展开：书从架位滑到视觉正面，同时两半叶张开
+  function openReader(rec, dur){
+    sizeReader(rec);
+    const h=rec.home, p=pulledPos(rec);
+    rec.mesh.visible=false;
+    READER.position.set(h.x,h.y,h.z);
+    aimReader(rec, p);                              // 按落点求偏航，抽出过程中不会偏
+    leafL.rotation.y=CLOSED; leafR.rotation.y=0;
+    READER.visible=true; lb.visible=true; drawLabel('《'+rec.title+'》');
+    move(READER, p, dur);
+    tween(leafL.rotation,'y', OPENED, dur*1.3);
+  }
+  // 合并：半叶转回闭合，收尾时把姿态交还原本书本网格
+  function closeReader(rec, dur){
+    const b=rec.mesh, p=pulledPos(rec);
+    tween(leafL.rotation,'y', CLOSED, dur);
+    b.position.copy(READER.position); b.quaternion.copy(READER.quaternion); b.visible=true;
+    move(b,p,dur); face(b, faceOf(rec,p), dur);
+    after(dur+0.02, ()=>{ READER.visible=false; lb.visible=false; });
+    READER.visible=false; lb.visible=false;
+  }
+  function hideReader(){
+    READER.visible=false; lb.visible=false;
+    leafL.rotation.y=CLOSED; leafR.rotation.y=0;
+  }
+
+  /* ---------------- 状态机 ---------------- */
+  function setState(rec, st, dur=.42){
+    if(!rec || st===rec.state) return null;
+    const p=pulledPos(rec);
+    if(st==='shelved'){
+      if(activeId===rec.id){ hideReader(); rec.mesh.visible=true; activeId=null; }
+      move(rec.mesh, rec.home, dur); face(rec.mesh, rec.restQ, dur);
+    } else if(st==='pulled'){
+      if(activeId && activeId!==rec.id) clearActive();
+      if(rec.state==='open'){ closeReader(rec,.34); }
+      else { rec.mesh.visible=true; move(rec.mesh,p,dur); face(rec.mesh, faceOf(rec,p), dur); }
+      activeId=rec.id;
+    } else {
+      if(activeId && activeId!==rec.id) clearActive();
+      openReader(rec, Math.max(dur,.5)); activeId=rec.id;
+    }
+    rec.state=st; rec.mesh.userData.open = st!=='shelved';
+    emit('book', { id:rec.id, title:rec.title, state:st,
+                   row:rec.row.i+1, slot:rec.row.units.indexOf(rec.unit)+1 });
+    bookUI();
+    return st;
+  }
+  function clearActive(){
+    if(!activeId) return;
+    const o=find(activeId); activeId=null;
+    if(!o) return;
+    if(o.state==='open'){ o.state='pulled'; hideReader(); o.mesh.visible=true;
+      const p=pulledPos(o); o.mesh.position.set(p.x,p.y,p.z); o.mesh.quaternion.copy(faceOf(o,p)); }
+  }
+  const bookLabel=(rec,st)=> st==='open' ? '展开《'+rec.title+'》'
+                          : st==='pulled' ? '抽出《'+rec.title+'》' : '归位《'+rec.title+'》';
+  // 点击书本：架上 → 抽到正面；已抽出 → 展开；已展开 → 合并
+  function clickBook(rec){
+    if(!rec) return null;
+    setState(rec, rec.state==='shelved' ? 'pulled' : rec.state==='pulled' ? 'open' : 'pulled');
+    return bookLabel(rec, rec.state);
+  }
+  const find=(id)=>REC.find(r=>r.id===id)||null;
+  const pullBook =id=>{ const r=find(id); return (!r||r.state!=='shelved')?null:(setState(r,'pulled',.42), bookLabel(r,'pulled')); };
+  const unfoldBook=id=>{ const r=find(id); return (!r||r.state==='open')?null:(setState(r,'open',.5), bookLabel(r,'open')); };
+  const foldBook  =id=>{ const r=find(id); return (!r||r.state!=='open')?null:(setState(r,'pulled',.4), bookLabel(r,'pulled')); };
+  const shelveBook=id=>{ const r=find(id); return (!r||r.state==='shelved')?null:(setState(r,'shelved',.45), bookLabel(r,'shelved')); };
+  // 换位：插到第 rowIdx 层（1 起）第 slot 位（1 起），目标层与来源层一起重排让位
+  function moveBook(id, rowIdx, slot){
+    const rec=find(id); if(!rec) return null;
+    const row=ROWS[Math.min(rows,Math.max(1,rowIdx))-1];
+    const from=rec.row, oldUnit=rec.unit;
+    const fi=from.units.indexOf(oldUnit);
+    if(oldUnit.kind!=='flat' || oldUnit.items.length<2) from.units.splice(fi,1);
+    else oldUnit.items.splice(oldUnit.items.indexOf(rec),1);
+    const unit={ kind: rec.flat ? 'flat' : 'v', items:[rec] };   // 平放的书换位后仍平放
+    const at=Math.min(row.units.length, Math.max(0, (slot||1)-1));
+    row.units.splice(at,0,unit); rec.unit=unit;
+    if(!fits(row)){                                              // 放不下 → 回滚
+      row.units.splice(at,1);
+      from.units.splice(Math.max(0,fi),0,oldUnit); rec.unit=oldUnit;
+      return { ok:false, msg:'第'+(row.i+1)+'层放不下，先减少该层的书' };
+    }
+    rec.row=row;                                          // 先落位，让 setState 里发出的 book 事件带上新家
+    if(rec.state!=='shelved'){ setState(rec,'shelved',0.001); rec.state='shelved'; }
+    rec.slotX=(rec.idx%3-1)*0.012;
+    rec.lift=rec.flat?(rec.rh-rec.thk)/2:0;
+    rec.restQ=rec.flat ? new THREE.Quaternion().setFromEuler(new THREE.Euler(0,(rec.idx%7-3)*0.05,0))
+                       : new THREE.Quaternion().setFromEuler(new THREE.Euler(0,(rec.idx%5-2)*0.013,0));
+    layout(row,true,.55); if(from!==row) layout(from,true,.55);
+    return { ok:true, row:row.i+1, slot:at+1, units:row.units.length,
+             msg:'《'+rec.title+'》→ 第'+(row.i+1)+'层 第'+(at+1)+'位' };
+  }
+
+  function bookable(b, row, flat){
+    b.geometry.computeBoundingBox();
+    const sz=b.geometry.boundingBox.getSize(new THREE.Vector3());
+    const title=TITLES[bookNo%TITLES.length]; const idx=bookNo++;
+    const pid='book-'+idx;
+    const rec={ id:pid, index:idx, idx, title, mesh:b, row, unit:null, flat:!!flat,
+                len:sz.z, thk:sz.y,
+                // 抽出立起后的封面尺寸：平放书绕 x 转 90°，宽=x、高=z、厚=y
+                rw:sz.x, rh:flat? sz.z : sz.y, rt:flat? sz.y : sz.z,
+                col:b.material.color.getHex(), slotX:b.position.x,
+                home:{ x:b.position.x, y:b.position.y, z:b.position.z },
+                restQ:b.quaternion.clone(), faceQ:null,
+                lift: flat ? (sz.z - sz.y)/2 : 0, state:'shelved' };
+    b.userData.open=false; b.userData.rec=rec;
+    g.add(b);                                            // 书本体挂到书架组
+    regPart(pid, { item:'shelf', kind:'switch',
+      get:()=>rec.state!=='shelved',
+      set:v=>{ setState(rec, v?'pulled':'shelved'); return rec.state!=='shelved'; },
+      label:v=>bookLabel(rec, v?'pulled':'shelved') });
+    REC.push(rec);
+    return act(b, ()=>clickBook(rec));
+  }
+
+  /* ---------------- 生成摆书 ---------------- */
+  const pushV=(row,rec)=>{ const u={kind:'v', items:[rec]}; rec.unit=u; row.units.push(u); };
+  for(let r=0;r<rows;r++){
+    const row=ROWS[r], y0=row.y0;
+    let z=-L/2+MARGIN; const limit=L/2-MARGIN;
+    if(r===2){                                       // 中间一层：平摞书 + 器物
+      const stack=[]; let h=y0;
+      for(let k=0;k<4;k++){
+        const th=0.028+rnd()*0.014, dd=0.24+rnd()*0.05;
+        const b=mesh(box(W-0.10,th,dd,0.004), bookMat(BOOK_COLORS[(k*3+r)%BOOK_COLORS.length]), 0, h+th/2, -0.30);
+        b.rotation.y=(rnd()-0.5)*0.10;
+        stack.push(bookable(b,row,true).userData.rec); h+=th+0.002;
+      }
+      const u={ kind:'flat', items:stack }; stack.forEach(s=>s.unit=u); row.units.push(u);
+      const pot=mesh(new THREE.CylinderGeometry(0.055,0.075,0.16,16),M.ceramic,0,y0+0.08,0.34);
+      pot.userData.shared=true; g.add(pot);
+      row.units.push({ kind:'prop', items:[], mesh:pot, w0:0.16, hy:0.08, x:0 });
       continue;
     }
     while(z<limit-0.04){
@@ -848,39 +1158,123 @@ function zoneAtPoint(pt){
       if(mode<0.62){                                  // 竖排成组
         const grp=2+Math.floor(rnd()*4);
         for(let k=0;k<grp && z<limit-0.03;k++){
-          const t=0.020+rnd()*0.026;                  // 书厚
-          const bh=0.20+rnd()*0.10;                   // 书高
-          const bd=0.26+rnd()*0.06;                   // 书深（沿 x）
+          const t=0.020+rnd()*0.026, bh=0.20+rnd()*0.10, bd=0.26+rnd()*0.06;
           const b=mesh(box(bd,bh,t,0.003), bookMat(BOOK_COLORS[(rnd()*BOOK_COLORS.length)|0]),
             (rnd()-0.5)*0.03, y0+bh/2, z+t/2);
-          b.rotation.y=(rnd()-0.5)*0.03; g.add(bookable(b, -0.30));
-          z+=t+0.004;
+          b.rotation.y=(rnd()-0.5)*0.03;
+          pushV(row, bookable(b,row,false).userData.rec); z+=t+GAP;
         }
       } else if(mode<0.78){                           // 斜靠一本
         const t=0.024+rnd()*0.02, bh=0.24+rnd()*0.06;
         const b=mesh(box(0.28,bh,t,0.003), bookMat(BOOK_COLORS[(rnd()*BOOK_COLORS.length)|0]),
           0, y0+bh*0.42, z+t/2);
-        b.rotation.x=0.28; g.add(bookable(b, -0.12)); z+=t+0.05;
+        b.rotation.x=0.28;
+        pushV(row, bookable(b,row,false).userData.rec); z+=t+GAP+0.045;
       } else if(mode<0.90){                           // 平摞两本
-        let h=y0;
+        const stack=[]; let h=y0;
         for(let k=0;k<2;k++){
           const th=0.030+rnd()*0.012;
-          const b=mesh(box(W-0.12,th,0.24,0.004), bookMat(BOOK_COLORS[(rnd()*BOOK_COLORS.length)|0]),
-            0, h+th/2, z+0.12);
-          g.add(bookable(b, 0.06));
-          h+=th+0.002;
+          const b=mesh(box(W-0.12,th,0.24,0.004), bookMat(BOOK_COLORS[(rnd()*BOOK_COLORS.length)|0]), 0, h+th/2, z+0.12);
+          stack.push(bookable(b,row,true).userData.rec); h+=th+0.002;
         }
-        z+=0.26;
+        const u={ kind:'flat', items:stack }; stack.forEach(s=>s.unit=u); row.units.push(u);
+        z+=0.24+GAP;
       } else { z+=0.06+rnd()*0.05; }                  // 留白
     }
-    // 层间小器物点缀
-    if(r===4) g.add(mesh(new THREE.SphereGeometry(0.062,14,10), M.bowl, 0.02, y0+0.06, L/2-0.20));
+    if(r===4){
+      const bowl=mesh(new THREE.SphereGeometry(0.062,14,10), M.bowl, 0.02, y0+0.06, L/2-0.20);
+      bowl.userData.shared=true; g.add(bowl);
+      row.units.push({ kind:'prop', items:[], mesh:bowl, w0:0.12, hy:0.06, x:0.02 });
+    }
   }
+  for(const row of ROWS) if(!layout(row,false)) console.warn('[书架] 第'+(row.i+1)+'层超容');
+  for(const rec of REC) BOOKS.push({ id:rec.id, index:rec.index, title:rec.title, mesh:rec.mesh });
+
+  /* ---------------- 书本操作条（书抽出后浮现在画面下方） ---------------- */
+  const el=id=>document.getElementById(id);
+  const bar=el('book'), bTitle=el('bkTitle'), bAt=el('bkAt'), bOpen=el('bkOpen'),
+        bBack=el('bkBack'), bMove=el('bkMove'), picker=el('bkPick'),
+        pRows=el('bkRows'), pSlots=el('bkSlots'), pHint=el('bkHint');
+  let pickRow=1, pickSlot=1;
+  const slotCount=(i)=>{ const row=ROWS[i-1]; return row? row.units.length : 0; };
+  function bookUI(){
+    const rec=find(activeId);
+    bar.classList.toggle('show', !!rec);
+    if(!rec) return;
+    bTitle.textContent='《'+rec.title+'》';
+    bAt.textContent='第'+(rec.row.i+1)+'层 · 第'+(rec.row.units.indexOf(rec.unit)+1)+'位';
+    bOpen.textContent = rec.state==='open' ? '合并' : '展开书本';
+    picker.classList.remove('show');
+  }
+  function renderPick(){
+    const rec=find(activeId); if(!rec) return;
+    pickRow=Math.min(rows,Math.max(1,pickRow));
+    pickSlot=Math.min(slotCount(pickRow)+1, Math.max(1,pickSlot));
+    pRows.innerHTML='';
+    for(let i=1;i<=rows;i++){
+      const c=document.createElement('button');
+      c.className='bk'+(i===pickRow?' on':''); c.textContent='第'+i+'层';
+      c.onclick=()=>{ pickRow=i; renderPick(); };
+      pRows.appendChild(c);
+    }
+    pSlots.innerHTML='';
+    const n=slotCount(pickRow)+1;
+    for(let i=1;i<=n;i++){
+      const c=document.createElement('button');
+      c.className='bk'+(i===pickSlot?' on':''); c.textContent=i;
+      c.onclick=()=>{ pickSlot=i; renderPick(); };
+      pSlots.appendChild(c);
+    }
+    pHint.textContent = pickSlot<=slotCount(pickRow)
+      ? '插入后第'+pickSlot+'位及之后的书会依次让位'
+      : '插到第'+pickRow+'层末尾';
+  }
+  bOpen.onclick =()=>{ const r=find(activeId); if(!r) return; setState(r, r.state==='open'?'pulled':'open', .5); };
+  bBack.onclick =()=>{ shelveBook(activeId); };
+  bMove.onclick =()=>{ if(!activeId) return;
+    const r=find(activeId); pickRow=r.row.i+1; pickSlot=r.row.units.indexOf(r.unit)+1;
+    renderPick(); picker.classList.toggle('show'); };
+  el('bkGo').onclick=()=>{
+    const r=find(activeId); if(!r) return;
+    const res=moveBook(r.id, pickRow, pickSlot);
+    pHint.textContent = res? res.msg : '未找到这本书';
+    if(res && res.ok){ picker.classList.remove('show'); bookUI(); }
+  };
+  el('bkNo').onclick=()=>picker.classList.remove('show');
+
+  /* ---------------- 对外句柄 ---------------- */
+  SHELF = {
+    rows, cap:CAP, titles:TITLES.slice(),
+    click:clickBook, pull:pullBook, unfold:unfoldBook, fold:foldBook, shelve:shelveBook, move:moveBook,
+    setState, stateOf:id=>{ const r=find(id); return r? r.state : null; },
+    active:()=>activeId, book:find, all:()=>REC.slice(), clearActive,
+    title:id=>{ const r=find(id); return r? r.title : null; },
+    slotOf(id){ const r=find(id); if(!r) return null;
+      return { row:r.row.i+1, slot:r.row.units.indexOf(r.unit)+1, units:r.row.units.length }; },
+    slots(rowIdx){ const row=ROWS[Math.min(rows,Math.max(1,rowIdx))-1]; if(!row) return [];
+      return row.units.map((u,k)=>({ slot:k+1, kind:u.kind,
+        titles:(u.items||[]).map(it=>it.title) })); },
+    count(rowIdx){ const row=ROWS[Math.min(rows,Math.max(1,rowIdx))-1];
+      return row? row.units.length : 0; },
+    free(rowIdx){ const row=ROWS[Math.min(rows,Math.max(1,rowIdx))-1]; if(!row) return 0;
+      return Math.max(0, Math.floor((CAP-naturalLen(row))/(0.026+GAP))); },
+    reader:READER,
+    // 把相机推到书面正前方（"抽到视觉正面"的配套运镜）
+    frame(id, dur=.9){
+      const r=find(id); if(!r) return false;
+      const w=bookWorld(r, pulledPos(r));
+      const dir=new THREE.Vector3().subVectors(camera.position, w); dir.y=0;
+      if(dir.lengthSq()<1e-6) dir.set(1,0,0);
+      dir.normalize().multiplyScalar(0.85);
+      flyTo(w.x+dir.x, w.y+0.18, w.z+dir.z, w.x, w.y, w.z, dur);
+      return true;
+    },
+    tick(){ if(READER.visible) aimReader(find(activeId)); },
+  };
   g.position.set(-3.85,0.40,-2.9);
   g.add(contact(0.06,0,0.52,1.9,0.41));
-  pick(g,'木质开放书架','家具 / FURNITURE','橡木五层格架，竖排、斜靠与平摞的书籍搭配陶器陈列。点击任意一本书可抽出细看，再点一次归位。', ['deck'], 'shelf');
+  pick(g,'木质开放书架','家具 / FURNITURE','橡木五层格架。点一本书先抽到视觉正面，再点一次展开细看；下方按钮可合并、放回书架，或指定层与位置重新插回——同层其余书本会一起挪动让位。', ['deck'], 'shelf');
 })();
-
 // 4 花器与枝条（CatmullRom 曲线生成连贯主枝 + 分枝，叶片沿曲线连续排布）
 (function(){
   const g=new THREE.Group();
@@ -1360,7 +1754,7 @@ function hintFor(root){
   if(id==='lamp') return '双击灯罩 → 开/关灯';
   const mine=[...PARTS.entries()].filter(([,p])=>p.item===root.userData.info.id).map(([k])=>k);
   if(!mine.length) return '';
-  if(mine.every(k=>k.startsWith('book-'))) return '点击任意一本书 → 抽出细看，再点归位（共 '+mine.length+' 本）';
+  if(mine.every(k=>k.startsWith('book-'))) return '点一本书 → 抽到正面；再点 → 展开；下方按钮可合并 / 放回 / 换位（共 '+mine.length+' 本）';
   return '可点击部件：' + mine.map(k=>PART_NAME[k]||k).join(' · ');
 }
 const PART_NAME = { 'shower':'花洒开关', 'tap':'水龙头', 'toilet-lid':'马桶盖', 'flush':'冲水',
@@ -1727,7 +2121,7 @@ function bookAt(ref){
   return null;
 }
 const Room3D = {
-  version: '1.0.0',
+  version: '1.1.0',
   /* ---- 场景信息 ---- */
   listItems(){ return [...ITEM_BY_ID.keys()]; },
   getItem(ref){ const r=itemRoot(ref); return r? {...r.userData.info, root:undefined} : null; },
@@ -1738,9 +2132,14 @@ const Room3D = {
   setPart(id, value){ return runPart(id, value); },        // value 省略 = 取反
   isPartOn(id){ const p=PARTS.get(id); return p? !!p.get() : null; },
   /* ---- 书架：逐本书 ---- */
-  books(){ return BOOKS.map(b=>({ id:b.id, index:b.index, title:b.title, open:b.mesh.userData.open })); },
-  book(ref){ const b=bookAt(ref); return b? { id:b.id, index:b.index, title:b.title, open:b.mesh.userData.open } : null; },
-  openBook(ref, open=true){ const b=bookAt(ref); return b? runPart(b.id, open) : null; },
+  books(){ return BOOKS.map(b=>({ id:b.id, index:b.index, title:b.title,
+    open:b.mesh.userData.open, state:SHELF.stateOf(b.id), ...SHELF.slotOf(b.id) })); },
+  book(ref){ const b=bookAt(ref); return b? { id:b.id, index:b.index, title:b.title,
+    open:b.mesh.userData.open, state:SHELF.stateOf(b.id), ...SHELF.slotOf(b.id) } : null; },
+  // openBook(ref, true) = 抽到视觉正面；第二参传 'open' 则直接展开
+  openBook(ref, open=true){ const b=bookAt(ref); if(!b) return null;
+    if(open==='open'||open==='unfold') return SHELF.unfoldBook(b.id);
+    return runPart(b.id, !!open); },
   closeBook(ref){ const b=bookAt(ref); return b? runPart(b.id, false) : null; },
   toggleBook(ref){ const b=bookAt(ref); return b? runPart(b.id) : null; },
   closeAllBooks(){ let n=0; for(const b of BOOKS) if(b.mesh.userData.open){ runPart(b.id,false); n++; } return n; },
@@ -1753,6 +2152,19 @@ const Room3D = {
     }
     return k;
   },
+  /* ---- 书本四段互动：抽出 / 展开 / 合并 / 放回 / 换位 ---- */
+  bookState(ref){ const b=bookAt(ref); return b? SHELF.stateOf(b.id) : null; },   // shelved|pulled|open
+  pullBook(ref){ const b=bookAt(ref); return b? SHELF.pull(b.id) : null; },       // 架上 → 抽到正面
+  unfoldBook(ref){ const b=bookAt(ref); return b? SHELF.unfold(b.id) : null; },   // → 展开
+  foldBook(ref){ const b=bookAt(ref); return b? SHELF.fold(b.id) : null; },       // 展开 → 合并（仍在手上）
+  shelveBook(ref){ const b=bookAt(ref); return b? SHELF.shelve(b.id) : null; },   // → 放回架上
+  // 换位：插到第 row 层（1 起）第 slot 位（1 起），该层其余书本自动让位
+  moveBook(ref, row, slot){ const b=bookAt(ref); if(!b) return null; return SHELF.move(b.id, row, slot); },
+  shelfSlots(row){ return SHELF.slots(row); },
+  shelfCount(row){ return SHELF.count(row); },
+  shelfFree(row){ return SHELF.free(row); },
+  activeBook(){ return SHELF.active(); },
+  frameBook(ref, dur){ const b=bookAt(ref); return b? SHELF.frame(b.id, dur) : false; },
   /* ---- 相机 / 空间导航 ---- */
   enterRoom(zoneId){ const z=ZONE_BY_ID.get(zoneId); if(z){ enterRoom(z); return true; } return false; },
   listZones(){ return ZONES.map(z=>({ id:z.id, name:z.name, doll:!!z.doll })); },
@@ -1797,7 +2209,9 @@ let last=performance.now();
 const _v=new THREE.Vector3();
 function loop(now){
   const dt=Math.min(0.05,(now-last)/1000); last=now;
-  tickCam(dt); tickTweens(dt); tickWater(dt); controls.update(); clampTarget();
+  tickCam(dt); tickTweens(dt); tickFaces(dt); tickAfters(dt); tickWater(dt);
+  if(SHELF) SHELF.tick();
+  controls.update(); clampTarget();
   if(selected){
     const b=new THREE.Box3().setFromObject(selected);
     b.getCenter(_v); _v.project(camera);
