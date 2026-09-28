@@ -494,8 +494,56 @@ function contact(x, z, w, d, y=0.004){
 
 /* ---------- 拾取注册（带所属空间，避免跨房间误选） ---------- */
 const pickables = [];
+// 通用补间：用于书本抽出、马桶盖翻起等单体互动
+const TWEENS = [];
+function tween(target, key, to, dur=0.35){
+  for(let i=TWEENS.length-1;i>=0;i--) if(TWEENS[i].t===target && TWEENS[i].k===key) TWEENS.splice(i,1);
+  TWEENS.push({ t:target, k:key, from:target[key], to, d:dur, e:0 });
+}
+function tickTweens(dt){
+  for(let i=TWEENS.length-1;i>=0;i--){
+    const w=TWEENS[i]; w.e=Math.min(w.d, w.e+dt);
+    const k=w.e/w.d, s=k<.5?2*k*k:1-Math.pow(-2*k+2,2)/2;
+    w.t[w.k]=w.from+(w.to-w.from)*s;
+    if(w.e>=w.d) TWEENS.splice(i,1);
+  }
+}
+// 给单个网格挂上"点一下就有反应"的行为：fn 返回一段提示文字
+function act(o, fn){ o.userData.act = { fn }; return o; }
+// 流动水体（花洒 / 龙头）：由 tickWater 逐帧下落
+const WATER = [];
+function tickWater(dt){
+  for(const w of WATER){
+    if(!w.group.visible) continue;
+    for(const d of w.drops){
+      d.y += d.v*dt;
+      if(d.y < w.floor){ d.y = w.top; d.v = 1.6 + Math.random()*1.1; }
+      d.mesh.position.y = d.y;
+    }
+    w.phase += dt*7;
+  }
+}
+function waterMat(){
+  return new THREE.MeshPhysicalMaterial({ color:0xbfd8e2, transparent:true, opacity:.55,
+    roughness:.08, metalness:0, depthWrite:false, clearcoat:1, ior:1.33 });
+}
+// 在 (x,z) 处生成一股从 top 落到 floor 的水；返回可 show/hide 的组
+function waterFlow(x, z, top, floor, radius, count){
+  const grp=new THREE.Group(); grp.visible=false;
+  const mat=waterMat(); const drops=[];
+  const geo=new THREE.CylinderGeometry(0.0055,0.0035,0.075,6);
+  for(let i=0;i<count;i++){
+    const a=Math.random()*Math.PI*2, r=Math.random()*radius;
+    const m=new THREE.Mesh(geo, mat);
+    m.position.set(x+Math.cos(a)*r, top-Math.random()*(top-floor), z+Math.sin(a)*r);
+    m.castShadow=false; m.receiveShadow=false; m.userData.shared=true; m.userData.noPick=true; grp.add(m);
+    drops.push({ mesh:m, y:m.position.y, v:1.6+Math.random()*1.1 });
+  }
+  WATER.push({ group:grp, drops, top, floor, phase:0 });
+  return grp;
+}
 function pick(obj, name, tag, desc, zones){
-  obj.traverse(o=>{ if(o.isMesh){ o.material = o.material.clone(); o.userData.orig = {
+  obj.traverse(o=>{ if(o.isMesh && !o.userData.shared){ o.material = o.material.clone(); o.userData.orig = {
     emissive:o.material.emissive ? o.material.emissive.getHex() : 0,
     intensity:o.material.emissiveIntensity ?? 1 }; }});
   obj.userData.info = { name, tag, desc, root:obj, zones: zones || ['all'] };
@@ -723,11 +771,11 @@ function zoneAtPoint(pt){
 (function(){
   const g=new THREE.Group();
   const W=0.42, Hh=2.05, L=1.7, rows=5;
-  g.add(slab(W,Hh,0.04,M.oak,0,Hh/2,-L/2));
+  g.add(slab(W,Hh,0.04,M.oak,0,Hh/2,-L/2));                        // 端板 ×2（沿 1.7m 两端）
   g.add(slab(W,Hh,0.04,M.oak,0,Hh/2, L/2));
-  g.add(slab(0.04,Hh,L,M.oak,-W/2,Hh/2,0));
-  g.add(slab(0.04,Hh,L,M.oak, W/2,Hh/2,0));
-  g.add(slab(0.04,Hh,L-0.04,M.wall,-W/2+0.02,Hh/2,0));         // 背板（贴墙一侧）
+  g.add(slab(0.04,Hh,L,M.oak,-W/2,Hh/2,0));                        // 背板框（贴墙一侧）
+  g.add(slab(0.02,Hh-0.02,L-0.02,M.wall,-W/2+0.03,Hh/2,0));        // 薄背板
+  // 正面（朝室内一侧）保持敞开，书本可直接抽出
   const shelfY=[];
   for(let i=0;i<=rows;i++){
     const y=0.02+i*(Hh-0.06)/rows;
@@ -740,6 +788,22 @@ function zoneAtPoint(pt){
   let seed=7;
   const rnd=()=>{ seed=(seed*1103515245+12345)&0x7fffffff; return seed/0x7fffffff; };
   const bookMat=(col)=>new THREE.MeshStandardMaterial({ color:col, roughness:.78 });
+  const TITLES=['空间的光','静物与白','住宅本质','材料的诚实','光影集','柔光','极简主义','造物','室外的房间','尺寸与比例','手作的温度','灰度','窗的知识','坐具论','陶与土','日常的诗意','阴翳礼赞','构筑文化','家的构造','留白'];
+  let bookNo=0;
+  const PULL=0.20;                       // 抽出距离（沿 +x，即书架开口方向）
+  // 把一本书变成可点击互动的个体：抽出/归位 + 外沿微微下垂
+  function bookable(b, lean){
+    const base=b.position.x, bz=b.rotation.z;
+    const title=TITLES[bookNo%TITLES.length]; bookNo++;
+    let out=false;
+    b.userData.open=false;
+    return act(b, ()=>{
+      out=!out; b.userData.open=out;
+      tween(b.position,'x', out? base+PULL : base, .32);
+      tween(b.rotation,'z', out? bz+lean : bz, .32);
+      return (out?'抽出《':'归位《')+title+'》';
+    });
+  }
   for(let r=0;r<rows;r++){
     const y0=shelfY[r]+0.018;                       // 层板顶面
     let z=-L/2+0.10;
@@ -750,7 +814,7 @@ function zoneAtPoint(pt){
         const th=0.028+rnd()*0.014;
         const b=mesh(box(W-0.10,th,0.24+rnd()*0.05,0.004),
           bookMat(BOOK_COLORS[(k*3+r)%BOOK_COLORS.length]), 0, h+th/2, -0.30);
-        b.rotation.y=(rnd()-0.5)*0.10; g.add(b); h+=th+0.002;
+        b.rotation.y=(rnd()-0.5)*0.10; g.add(bookable(b, 0.05)); h+=th+0.002;
       }
       g.add(mesh(new THREE.CylinderGeometry(0.055,0.075,0.16,16),M.ceramic,0,y0+0.08,0.34));
       continue;
@@ -765,20 +829,21 @@ function zoneAtPoint(pt){
           const bd=0.26+rnd()*0.06;                   // 书深（沿 x）
           const b=mesh(box(bd,bh,t,0.003), bookMat(BOOK_COLORS[(rnd()*BOOK_COLORS.length)|0]),
             (rnd()-0.5)*0.03, y0+bh/2, z+t/2);
-          b.rotation.y=(rnd()-0.5)*0.03; g.add(b);
+          b.rotation.y=(rnd()-0.5)*0.03; g.add(bookable(b, -0.30));
           z+=t+0.004;
         }
       } else if(mode<0.78){                           // 斜靠一本
         const t=0.024+rnd()*0.02, bh=0.24+rnd()*0.06;
         const b=mesh(box(0.28,bh,t,0.003), bookMat(BOOK_COLORS[(rnd()*BOOK_COLORS.length)|0]),
           0, y0+bh*0.42, z+t/2);
-        b.rotation.x=0.28; g.add(b); z+=t+0.05;
+        b.rotation.x=0.28; g.add(bookable(b, -0.12)); z+=t+0.05;
       } else if(mode<0.90){                           // 平摞两本
         let h=y0;
         for(let k=0;k<2;k++){
           const th=0.030+rnd()*0.012;
-          g.add(mesh(box(W-0.12,th,0.24,0.004), bookMat(BOOK_COLORS[(rnd()*BOOK_COLORS.length)|0]),
-            0, h+th/2, z+0.12));
+          const b=mesh(box(W-0.12,th,0.24,0.004), bookMat(BOOK_COLORS[(rnd()*BOOK_COLORS.length)|0]),
+            0, h+th/2, z+0.12);
+          g.add(bookable(b, 0.06));
           h+=th+0.002;
         }
         z+=0.26;
@@ -789,7 +854,7 @@ function zoneAtPoint(pt){
   }
   g.position.set(-3.85,0.40,-2.9);
   g.add(contact(0.06,0,0.52,1.9,0.41));
-  pick(g,'木质开放书架','家具 / FURNITURE','橡木五层格架，竖排、斜靠与平摞的书籍搭配陶器陈列，同时界定地台边界。', ['deck']);
+  pick(g,'木质开放书架','家具 / FURNITURE','橡木五层格架，竖排、斜靠与平摞的书籍搭配陶器陈列。点击任意一本书可抽出细看，再点一次归位。', ['deck']);
 })();
 
 // 4 花器与枝条（CatmullRom 曲线生成连贯主枝 + 分枝，叶片沿曲线连续排布）
@@ -868,36 +933,40 @@ function zoneAtPoint(pt){
   pick(g,'模块化布艺沙发','家具 / FURNITURE','米白亚麻模块沙发，低靠背 + 圆柱抱枕，带前后扶手模块，靠墙留出通行缝。', ['living']);
 })();
 
-// 7 条纹异形单人椅（壳体为带厚度的实心弧面，与坐垫/底座咬合，不再出现分离缝隙）
+// 7 条纹异形单人椅（靠背弧面正对坐垫后方，半径收小、与坐垫同轴咬合）
 (function(){
   const g=new THREE.Group();
-  const A0=-2.35, A1=0.25;                       // 靠背弧面角度范围
-  const base=mesh(box(0.92,0.34,0.86,0.16),M.stripe,0,0.2,0.02); g.add(base);
-  const seat=mesh(box(0.86,0.20,0.80,0.10),M.stripe,0,0.40,0.04); g.add(seat);
-  // 靠背：环形扇面挤出成实体，底部插入坐垫 6cm
+  const A0=0.44, A1=Math.PI-0.44;          // 弧面角度（约 25°..155°，正中对准 -Z 后方）
+  const R0=0.44, R1=0.52;                  // 内 / 外半径（比原先收小）
+  const CY=0.28, DEPTH=0.60, CZ=0.14;      // 靠背底面高度 / 高度 / 弧心 z（让内壁嵌进坐垫）
+  const base=mesh(box(0.92,0.34,0.74,0.16),M.stripe,0,0.2,0.06); g.add(base);
+  const seat=mesh(box(0.86,0.20,0.80,0.10),M.stripe,0,0.40,0.02); g.add(seat);
+  // 靠背：环形扇面挤出实体。shape 的 +y 经 rotateX(-90°) 映射为世界 -z，
+  // 因此弧心放在 z=+0.14、内半径 0.44 → 内壁 z=-0.30 落在坐垫内（z 范围 -0.38..0.42），无缝咬合
   const sh=new THREE.Shape();
-  sh.absarc(0,0,0.62,A0,A1,false);
-  sh.absarc(0,0,0.545,A1,A0,true);
+  sh.absarc(0,0,R1,A0,A1,false);
+  sh.absarc(0,0,R0,A1,A0,true);
   sh.closePath();
-  const backGeo=new THREE.ExtrudeGeometry(sh,{depth:0.62,bevelEnabled:false,curveSegments:26,steps:1});
+  const backGeo=new THREE.ExtrudeGeometry(sh,{depth:DEPTH,bevelEnabled:false,curveSegments:26,steps:1});
   backGeo.rotateX(-Math.PI/2);
   const back=new THREE.Mesh(backGeo, M.stripe);
-  back.position.set(0,0.34,-0.16);
-  back.scale.set(1,1,0.72);
+  back.position.set(0,CY,CZ);
   back.castShadow=back.receiveShadow=true; g.add(back);
-  // 顶部卷边：与靠背同心的半圆管，消除薄边感
-  const roll=new THREE.Mesh(new THREE.TorusGeometry(0.5825,0.042,10,30,A1-A0),M.stripe);
-  roll.rotation.x=Math.PI/2; roll.rotation.z=-A1;
-  roll.position.set(0,0.96,-0.16); roll.scale.set(1,0.72,1);
+  // 顶部卷边：与靠背同一弧心的半圆管（几何层面旋转，避免欧拉顺序歧义）
+  const rollGeo=new THREE.TorusGeometry((R0+R1)/2,0.042,10,30,A1-A0);
+  rollGeo.rotateZ(A0); rollGeo.rotateX(-Math.PI/2);
+  const roll=new THREE.Mesh(rollGeo, M.stripe);
+  roll.position.set(0,CY+DEPTH,CZ);
   roll.castShadow=true; g.add(roll);
-  // 扶手：从坐垫外沿斜接到靠背外侧
+  // 扶手：贴在弧面两端外沿，与靠背端头对齐
   for(const sx of [-1,1]){
-    const a=mesh(box(0.22,0.40,0.66,0.11),M.stripe,sx*0.40,0.46,0.10);
-    a.rotation.z=sx*0.10; g.add(a);
+    const a=mesh(box(0.13,0.06,0.44,0.028),M.stripe,sx*0.455,0.60,-0.10);
+    a.rotation.x=0.06; g.add(a);
+    g.add(mesh(box(0.11,0.26,0.12,0.04),M.stripe,sx*0.455,0.46,-0.26));
   }
   g.add(contact(0,0.02,1.5,1.6));
   g.position.set(-0.35,0,-0.1); g.rotation.y=0.98;
-  pick(g,'条纹异形单椅','家具 / FURNITURE','卷曲造型的休闲单椅，砖红 × 藕粉横条纹，是空间里的色彩锚点。', ['living']);
+  pick(g,'条纹异形单椅','家具 / FURNITURE','卷曲造型的休闲单椅，靠背弧面正对坐垫、半径收小更贴合身形；砖红 × 藕粉横条纹，是空间里的色彩锚点。', ['living']);
 })();
 
 // 8 条纹坐墩
@@ -946,14 +1015,20 @@ function zoneAtPoint(pt){
   leg(-0.3,-0.3, -0.05,-0.02, 0.4); leg(0.3,-0.3, -0.05,-0.02, 0.4);
   const seat=mesh(box(0.62,0.05,0.6,0.02),M.cane,0,0.44,0.02); seat.rotation.x=-0.06; g.add(seat);
   g.add(slab(0.66,0.05,0.06,M.oak,0,0.47,-0.3));
-  const bk=mesh(box(0.62,0.52,0.05,0.02),M.cane,0,0.72,-0.32); bk.rotation.x=0.3; g.add(bk);
-  g.add(slab(0.66,0.06,0.06,M.oak,0,0.97,-0.4));
+  /* 靠背：整组后倾，顶栏与立柱随背板一起旋转，不再有多余的浮空木条 */
+  const bkG=new THREE.Group();
+  bkG.position.set(0,0.44,-0.30);
+  bkG.rotation.x=-0.34;                       // 向后倾斜约 19°
+  bkG.add(mesh(box(0.60,0.54,0.045,0.02),M.cane,0,0.31,0));              // 藤编背板
+  bkG.add(slab(0.66,0.055,0.07,M.oak,0,0.63,0));                         // 顶栏（压住背板上沿）
+  for(const sx of [-1,1]) bkG.add(slab(0.05,0.66,0.05,M.oak,sx*0.315,0.33,0));  // 两侧立柱（落到坐面）
+  g.add(bkG);
   for(const sx of [-1,1]){
     const r=mesh(box(0.06,0.05,0.62,0.02),M.oak,sx*0.32,0.62,0.02); r.rotation.x=-0.05; g.add(r);
     g.add(slab(0.05,0.3,0.05,M.oak,sx*0.32,0.5,-0.28));
   }
   g.position.set(-2.0,0,2.15); g.rotation.y=1.95;
-  pick(g,'藤编木质休闲椅','家具 / FURNITURE','实木框架 + 天然藤编坐背，低矮斜躺角度，为中古风味的单座。', ['living']);
+  pick(g,'藤编木质休闲椅','家具 / FURNITURE','实木框架 + 天然藤编坐背，靠背整体后倾约 19°，顶栏与立柱连成一体，为中古风味的斜躺单座。', ['living']);
 })();
 
 // 11 落地灯（立于抬高地台之上；双击开/关灯）
@@ -1032,40 +1107,90 @@ let BATHROOM=null;
   const sx0=X1-1.12, sz0=Z1-1.18;
   g.add(slab(1.12,0.07,1.18,M.stone,(sx0+X1)/2,0.035,(sz0+Z1)/2));      // 挡水石材基座
   const gS=new THREE.Mesh(new THREE.PlaneGeometry(1.12,2.06), M.frosted);
-  gS.position.set((sx0+X1)/2,1.06,sz0); g.add(gS);                       // 南向玻璃
+  gS.position.set((sx0+X1)/2,1.06,sz0); gS.userData.noPick=true; g.add(gS);   // 南向玻璃（不挡点击）
   const gW=new THREE.Mesh(new THREE.PlaneGeometry(1.18,2.06), M.frosted);
-  gW.position.set(sx0,1.06,(sz0+Z1)/2); gW.rotation.y=Math.PI/2; g.add(gW); // 西向玻璃
+  gW.position.set(sx0,1.06,(sz0+Z1)/2); gW.rotation.y=Math.PI/2;
+  gW.userData.noPick=true; g.add(gW);                                         // 西向玻璃
   g.add(slab(0.04,2.08,0.04,M.chrome,sx0,1.06,sz0));
   g.add(slab(0.04,0.04,1.20,M.chrome,sx0,2.10,(sz0+Z1)/2));
   g.add(slab(1.14,0.04,0.04,M.chrome,(sx0+X1)/2,2.10,sz0));
-  // 花洒：立杆 + 弯臂 + 顶喷 + 控制阀
+  /* 花洒：立杆 + 弯臂 + 顶喷 + 控制阀（阀可点击开关水） */
   const hx=X1-0.14, hz=Z1-0.20;
   g.add(mesh(new THREE.CylinderGeometry(0.024,0.024,1.86,12),M.chrome,hx,0.95,hz));
   const arm=mesh(new THREE.CylinderGeometry(0.02,0.02,0.42,10),M.chrome,hx,1.86,hz-0.20);
   arm.rotation.x=Math.PI/2; g.add(arm);
-  g.add(mesh(new THREE.CylinderGeometry(0.115,0.115,0.028,22),M.chrome,hx,1.84,hz-0.40));
-  g.add(mesh(new THREE.CylinderGeometry(0.05,0.05,0.09,14),M.chrome,hx,1.20,hz));
+  const head=mesh(new THREE.CylinderGeometry(0.115,0.115,0.028,22),M.chrome,hx,1.84,hz-0.40);
+  g.add(head);
+  // 顶喷下方的出水盘面，开水时略微发亮
+  const face=mesh(new THREE.CylinderGeometry(0.104,0.104,0.006,22),
+    new THREE.MeshStandardMaterial({ color:0x9fb6bd, roughness:.35, metalness:.6,
+      emissive:0x24505e, emissiveIntensity:0 }), hx,1.822,hz-0.40);
+  g.add(face);
+  const showerWater = waterFlow(hx, hz-0.40, 1.80, 0.085, 0.095, 46);
+  g.add(showerWater);
+  const valve=mesh(new THREE.CylinderGeometry(0.05,0.05,0.09,14),M.chrome,hx,1.20,hz);
+  // 阀体上的指示柄：开关时明显转动（绕自身轴旋转是看不见的）
+  const vInd=mesh(new THREE.BoxGeometry(0.014,0.012,0.075,1,1,1),M.dark,0,0.03,0);
+  valve.add(vInd);
+  g.add(act(valve, ()=>{
+    const on=!showerWater.visible;
+    showerWater.visible=on; face.material.emissiveIntensity = on?0.85:0;
+    tween(valve.rotation,'y', on? 1.15 : 0, .3);
+    return on?'花洒放水':'花洒关水';
+  }));
   // 壁龛置物
   g.add(slab(0.30,0.02,0.16,M.stone,hx-0.02,1.42,hz-0.02));
   /* 台盆柜：西墙 */
   const vx=X0+0.30, vz=4.62;
   g.add(slab(0.54,0.56,0.92,M.oak,vx,0.34,vz));
   g.add(slab(0.58,0.045,0.96,M.marble,vx,0.64,vz));
-  g.add(mesh(new THREE.CylinderGeometry(0.19,0.145,0.13,26),M.porcelain,vx,0.72,vz));   // 台上盆
+  const basin=mesh(new THREE.CylinderGeometry(0.19,0.145,0.13,26),M.porcelain,vx,0.72,vz);   // 台上盆
+  g.add(basin);
+  // 盆内水面，开水时轻微起伏
+  const surf=mesh(new THREE.CylinderGeometry(0.155,0.155,0.006,24),
+    new THREE.MeshPhysicalMaterial({ color:0xcfe3ea, transparent:true, opacity:.5, roughness:.06,
+      clearcoat:1, depthWrite:false }), vx,0.762,vz);
+  surf.castShadow=false; g.add(surf); surf.visible=false;
   g.add(mesh(new THREE.CylinderGeometry(0.017,0.017,0.24,12),M.chrome,vx,0.79,vz-0.30)); // 龙头立柱
   const sp=mesh(new THREE.CylinderGeometry(0.014,0.014,0.17,12),M.chrome,vx,0.91,vz-0.22);
   sp.rotation.x=Math.PI/2; g.add(sp);                                                    // 出水口
+  const tapWater = waterFlow(vx, vz-0.115, 0.90, 0.766, 0.016, 12);
+  g.add(tapWater);
+  // 龙头把手（沿 z 伸出的拨杆）：绕 x 轴上抬，点击开关水
+  const handle=mesh(new THREE.BoxGeometry(0.035,0.02,0.13,1,1,1),M.chrome,vx,0.925,vz-0.245);
+  g.add(act(handle, ()=>{
+    const on=!tapWater.visible;
+    tapWater.visible=on; surf.visible=on;
+    tween(handle.rotation,'x', on? 0.7 : 0, .25);
+    return on?'龙头放水':'龙头关水';
+  }));
   const mir=new THREE.Mesh(new THREE.PlaneGeometry(0.92,0.86), M.mirror);
   mir.position.set(X0-0.27,1.48,vz); mir.rotation.y=Math.PI/2; g.add(mir);
   g.add(slab(0.03,0.02,0.96,M.metal,X0-0.26,1.94,vz));
   g.add(contact(vx,vz,1.0,1.5,0.012));
-  /* 壁挂马桶：北墙偏西 */
+  /* 壁挂马桶：北墙偏西（盖板绕后沿铰链翻起） */
   const tx=2.30;
   g.add(slab(0.46,0.66,0.16,M.wallG,tx,0.33,Z1-0.08));                 // 半高背板（藏水箱）
   g.add(mesh(box(0.40,0.30,0.55,0.13),M.porcelain,tx,0.46,Z1-0.42));   // 便体
   g.add(mesh(box(0.42,0.035,0.44,0.02),M.porcelain,tx,0.63,Z1-0.40));  // 座圈
-  g.add(slab(0.42,0.022,0.44,M.black,tx,0.655,Z1-0.40));               // 盖板
-  g.add(slab(0.18,0.02,0.12,M.chrome,tx,0.70,Z1-0.16));                // 冲水面板
+  // 盆内胆（翻开盖板后可见）
+  const bowlIn=mesh(new THREE.CylinderGeometry(0.145,0.10,0.05,22),
+    new THREE.MeshPhysicalMaterial({ color:0xeceae5, roughness:.18, clearcoat:1 }), tx,0.615,Z1-0.42);
+  g.add(bowlIn);
+  const HINGE=Z1-0.18;                                                 // 铰链位于盖板后沿
+  const lid=new THREE.Group(); lid.position.set(tx,0.655,HINGE); g.add(lid);
+  const lidMesh=slab(0.42,0.022,0.44,M.black,0,0,-0.22);
+  lid.add(act(lidMesh, ()=>{
+    const up = lid.rotation.x > 0.6;
+    tween(lid.rotation,'x', up? 0 : 1.25, .4);   // 绕后沿铰链向上翻起
+    return up?'盖上马桶盖':'掀起马桶盖';
+  }));
+  const flush=slab(0.18,0.02,0.12,M.chrome,tx,0.70,Z1-0.16);            // 冲水面板
+  g.add(act(flush, ()=>{
+    tween(flush.position,'y', 0.688, .12);
+    setTimeout(()=>tween(flush.position,'y', 0.70, .18), 140);
+    return '冲水';
+  }));
   /* 五金 */
   const tb=mesh(new THREE.CylinderGeometry(0.016,0.016,0.62,10),M.chrome,X1-0.06,1.30,4.30);
   tb.rotation.x=Math.PI/2; g.add(tb);
@@ -1077,7 +1202,7 @@ let BATHROOM=null;
   mat.castShadow=false; g.add(mat);
   const bl=new THREE.Mesh(new THREE.CylinderGeometry(0.10,0.10,0.02,18),M.emit);
   bl.position.set(2.60,H-0.02,5.00); g.add(role(bl,'emit'));
-  pick(g,'浴室卫生间','功能空间 / WET ROOM','磨砂玻璃湿区 + 石材挡水基座；橡木浴室柜配大理石台面与台上盆，壁挂马桶便于清洁。', ['bath']);
+  pick(g,'浴室卫生间','功能空间 / WET ROOM','磨砂玻璃湿区 + 石材挡水基座；橡木浴室柜配大理石台面与台上盆，壁挂马桶便于清洁。可点击：马桶盖翻起、冲水面板、龙头把手放水、花洒阀开关。', ['bath']);
   BATHROOM = g;
 })();
 
@@ -1176,6 +1301,9 @@ let selected = null;
 function visibleUp(o){ let p=o; while(p){ if(p.visible===false) return false; p=p.parent; } return true; }
 
 function infoOf(o){ let p=o; while(p){ if(p.userData.info) return p.userData.info; p=p.parent; } return null; }
+let _hitObj = null;
+// 命中物体向上找"可互动"节点（书本、马桶盖、水龙头…）
+function actOf(o){ let p=o; while(p){ if(p.userData && p.userData.act) return p; p=p.parent; } return null; }
 function tint(root, on){
   root.traverse(o=>{
     if(!o.isMesh || !o.userData.orig || !o.material.emissive) return;
@@ -1220,7 +1348,8 @@ function castAt(cx,cy){
   ray.setFromCamera(ptr, camera);
   const list = (mode==='room' && currentZone)
     ? pickables.filter(pk=>inZone(pk.userData.info, currentZone)) : pickables;
-  const hits = ray.intersectObjects(list, true).filter(h=>visibleUp(h.object));
+  const hits = ray.intersectObjects(list, true).filter(h=>visibleUp(h.object) && !h.object.userData.noPick);
+  _hitObj = hits.length ? hits[0].object : null;
   return hits.length ? infoOf(hits[0].object) : null;
 }
 const _hit = new THREE.Vector3();
@@ -1298,7 +1427,14 @@ canvas.addEventListener('pointerup', e=>{
       lastTap.root = null;
     } else {
       const i = castAt(e.clientX,e.clientY);
-      if(i){
+      const actor = i ? actOf(_hitObj) : null;
+      if(i && actor){
+        // 单体互动优先于双击开关（书本、马桶盖、龙头…）
+        if(selected !== i.root) select(i.root);
+        const label = actor.userData.act.fn();
+        if(label) flashAction(i.root, label);
+        lastTap.root = null;
+      } else if(i){
         if(dbl && i.root === lastTap.root && i.root.userData.toggle){
           const label = toggleAction(i.root);
           if(label) flashAction(i.root, label);
@@ -1520,7 +1656,7 @@ let last=performance.now();
 const _v=new THREE.Vector3();
 function loop(now){
   const dt=Math.min(0.05,(now-last)/1000); last=now;
-  tickCam(dt); controls.update(); clampTarget();
+  tickCam(dt); tickTweens(dt); tickWater(dt); controls.update(); clampTarget();
   if(selected){
     const b=new THREE.Box3().setFromObject(selected);
     b.getCenter(_v); _v.project(camera);
