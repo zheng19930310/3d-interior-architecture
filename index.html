@@ -510,6 +510,27 @@ function tickTweens(dt){
 }
 // 给单个网格挂上"点一下就有反应"的行为：fn 返回一段提示文字
 function act(o, fn){ o.userData.act = { fn }; return o; }
+/* ---------- 对外 API 支撑：部件注册表 + 事件总线 ----------
+   每个可互动部件用字符串 id 寻址，set/get 幂等，便于外部集成调用 */
+const PARTS = new Map();
+const BOOKS = [];
+const _listeners = new Map();
+function emit(ev, data){
+  const l=_listeners.get(ev); if(l) for(const f of l){ try{ f(data); }catch(e){ console.warn('[Room3D] listener error', e); } }
+  const a=_listeners.get('*'); if(a) for(const f of a){ try{ f(Object.assign({event:ev}, data)); }catch(e){ console.warn(e); } }
+}
+function regPart(id, meta){ PARTS.set(id, meta); return id; }
+// value 省略 = 取反；pulse 类（冲水）忽略 value
+function runPart(id, value){
+  const p = PARTS.get(id); if(!p) return null;
+  const v = p.kind==='pulse' ? true : (value===undefined ? !p.get() : !!value);
+  const applied = !!p.set(v);
+  const label = p.label ? p.label(applied) : id;
+  emit('part', { id, item:p.item, kind:p.kind, value:applied, label });
+  return label;
+}
+// 把部件绑定到某个网格的点击上（点击即取反）
+function toggleAct(el, id){ return act(el, ()=>runPart(id)); }
 // 流动水体（花洒 / 龙头）：由 tickWater 逐帧下落
 const WATER = [];
 function tickWater(dt){
@@ -542,11 +563,11 @@ function waterFlow(x, z, top, floor, radius, count){
   WATER.push({ group:grp, drops, top, floor, phase:0 });
   return grp;
 }
-function pick(obj, name, tag, desc, zones){
+function pick(obj, name, tag, desc, zones, id){
   obj.traverse(o=>{ if(o.isMesh && !o.userData.shared){ o.material = o.material.clone(); o.userData.orig = {
     emissive:o.material.emissive ? o.material.emissive.getHex() : 0,
     intensity:o.material.emissiveIntensity ?? 1 }; }});
-  obj.userData.info = { name, tag, desc, root:obj, zones: zones || ['all'] };
+  obj.userData.info = { name, tag, desc, root:obj, zones: zones || ['all'], id: id || null };
   pickables.push(obj);
   scene.add(obj);
   return obj;
@@ -592,10 +613,9 @@ function applyTv(){
   }
 }
 function toggleAction(root){
-  const t = root.userData.toggle;
-  if(t==='lamp'){ lampOn=!lampOn; applyLamp(); return lampOn?'开灯': '关灯'; }
-  if(t==='tv'){ tvOn=!tvOn; applyTv(); return tvOn?'开机':'关机'; }
-  return null;
+  // 双击开关统一走部件注册表，保证与 API 调用行为一致
+  const id = root.userData.partId;
+  return id ? runPart(id) : null;
 }
 function role(o,r){ o.userData.role = r; return o; }
 
@@ -747,7 +767,7 @@ function zoneAtPoint(pt){
   // 地台边缘灯带槽（真实感）
   g.add(slab(8.2,0.02,0.03,M.dark,0,0.395,-0.995));
   g.children.forEach(c=>{c.receiveShadow=true});
-  pick(g,'抬高地台 · 木平台','硬装 / HARDSCAPE','320mm 高木质地台通铺至两侧墙，与客厅形成抬升的静谧区，可坐可卧、承接窗光。', ['deck']);
+  pick(g,'抬高地台 · 木平台','硬装 / HARDSCAPE','320mm 高木质地台通铺至两侧墙，与客厅形成抬升的静谧区，可坐可卧、承接窗光。', ['deck'], 'deck');
 })();
 
 // 2 百叶窗 + 窗
@@ -764,7 +784,7 @@ function zoneAtPoint(pt){
     color:0xcfe0e6, transparent:true, opacity:.18, roughness:.05, metalness:0 }));
   gl.position.set(0,1.5,-4.4); g.add(gl);
   g.add(slab(6.0,0.08,0.12,M.wall,0,0.36,-4.36));
-  pick(g,'木百叶帘','软装 / SOFT FURNISHING','木色横向百叶，过滤直射光，让地台区保持柔和的漫射亮度。', ['deck']);
+  pick(g,'木百叶帘','软装 / SOFT FURNISHING','木色横向百叶，过滤直射光，让地台区保持柔和的漫射亮度。', ['deck'], 'blinds');
 })();
 
 // 3 木质书架（分层 + 真实摆书：竖排、斜靠、平摞、横放）
@@ -794,15 +814,19 @@ function zoneAtPoint(pt){
   // 把一本书变成可点击互动的个体：抽出/归位 + 外沿微微下垂
   function bookable(b, lean){
     const base=b.position.x, bz=b.rotation.z;
-    const title=TITLES[bookNo%TITLES.length]; bookNo++;
+    const title=TITLES[bookNo%TITLES.length]; const idx=bookNo++;
     let out=false;
     b.userData.open=false;
-    return act(b, ()=>{
-      out=!out; b.userData.open=out;
-      tween(b.position,'x', out? base+PULL : base, .32);
-      tween(b.rotation,'z', out? bz+lean : bz, .32);
-      return (out?'抽出《':'归位《')+title+'》';
-    });
+    const pid = 'book-'+idx;
+    regPart(pid, { item:'shelf', kind:'switch',
+      get:()=>out,
+      set:v=>{ out=!!v; b.userData.open=out;
+               tween(b.position,'x', out? base+PULL : base, .32);
+               tween(b.rotation,'z', out? bz+lean : bz, .32);
+               return out; },
+      label:v=>(v?'抽出《':'归位《')+title+'》' });
+    BOOKS.push({ id:pid, index:idx, title, mesh:b });
+    return act(b, ()=>runPart(pid));
   }
   for(let r=0;r<rows;r++){
     const y0=shelfY[r]+0.018;                       // 层板顶面
@@ -854,7 +878,7 @@ function zoneAtPoint(pt){
   }
   g.position.set(-3.85,0.40,-2.9);
   g.add(contact(0.06,0,0.52,1.9,0.41));
-  pick(g,'木质开放书架','家具 / FURNITURE','橡木五层格架，竖排、斜靠与平摞的书籍搭配陶器陈列。点击任意一本书可抽出细看，再点一次归位。', ['deck']);
+  pick(g,'木质开放书架','家具 / FURNITURE','橡木五层格架，竖排、斜靠与平摞的书籍搭配陶器陈列。点击任意一本书可抽出细看，再点一次归位。', ['deck'], 'shelf');
 })();
 
 // 4 花器与枝条（CatmullRom 曲线生成连贯主枝 + 分枝，叶片沿曲线连续排布）
@@ -898,7 +922,7 @@ function zoneAtPoint(pt){
   ].map(p=>stem(p,9));
   void mains; void subs;
   g.position.set(0.35,0.40,-3.5);
-  pick(g,'插花枝条','陈设 / STYLING','一株舒展的枝条 + 素色陶器，是地台尽端的视觉焦点。', ['deck']);
+  pick(g,'插花枝条','陈设 / STYLING','一株舒展的枝条 + 素色陶器，是地台尽端的视觉焦点。', ['deck'], 'branches');
 })();
 
 // 5 羊毛地毯
@@ -907,7 +931,7 @@ function zoneAtPoint(pt){
   const r=mesh(box(4.7,0.024,3.25,0.012),M.rug,0,0.012,0);
   r.castShadow=false; r.receiveShadow=true; g.add(r);
   g.position.set(0.85,0,1.0);
-  pick(g,'羊毛短绒地毯','软装 / SOFT FURNISHING','暖灰色短绒地毯，界定会客区，吸收回声并统一地面色调。', ['living']);
+  pick(g,'羊毛短绒地毯','软装 / SOFT FURNISHING','暖灰色短绒地毯，界定会客区，吸收回声并统一地面色调。', ['living'], 'rug');
 })();
 
 // 6 模块化布艺沙发（整体内收，靠背与右墙之间留出通行缝，不再穿墙）
@@ -930,7 +954,7 @@ function zoneAtPoint(pt){
   g.add(mesh(box(1.08,0.44,0.28,0.12),M.sofa,0,0.35,-L/2-0.12));    // 扶手
   g.add(contact(0,0,1.7,L+0.7));
   g.position.set(3.05,0,0.55);
-  pick(g,'模块化布艺沙发','家具 / FURNITURE','米白亚麻模块沙发，低靠背 + 圆柱抱枕，带前后扶手模块，靠墙留出通行缝。', ['living']);
+  pick(g,'模块化布艺沙发','家具 / FURNITURE','米白亚麻模块沙发，低靠背 + 圆柱抱枕，带前后扶手模块，靠墙留出通行缝。', ['living'], 'sofa');
 })();
 
 // 7 条纹异形单人椅（靠背弧面正对坐垫后方，半径收小、与坐垫同轴咬合）
@@ -966,7 +990,7 @@ function zoneAtPoint(pt){
   }
   g.add(contact(0,0.02,1.5,1.6));
   g.position.set(-0.35,0,-0.1); g.rotation.y=0.98;
-  pick(g,'条纹异形单椅','家具 / FURNITURE','卷曲造型的休闲单椅，靠背弧面正对坐垫、半径收小更贴合身形；砖红 × 藕粉横条纹，是空间里的色彩锚点。', ['living']);
+  pick(g,'条纹异形单椅','家具 / FURNITURE','卷曲造型的休闲单椅，靠背弧面正对坐垫、半径收小更贴合身形；砖红 × 藕粉横条纹，是空间里的色彩锚点。', ['living'], 'chair-stripe');
 })();
 
 // 8 条纹坐墩
@@ -975,7 +999,7 @@ function zoneAtPoint(pt){
   const p=mesh(new THREE.SphereGeometry(0.34,22,16),M.stripe,0,0.28,0);
   p.scale.set(1.05,0.82,1.0); g.add(p);
   g.position.set(-1.85,0,1.05);
-  pick(g,'圆形条纹坐墩','家具 / FURNITURE','与单椅同面料的落地坐墩，可搁脚、可加座。', ['living']);
+  pick(g,'圆形条纹坐墩','家具 / FURNITURE','与单椅同面料的落地坐墩，可搁脚、可加座。', ['living'], 'pouf');
 })();
 
 // 9 玻璃圆茶几
@@ -996,7 +1020,7 @@ function zoneAtPoint(pt){
   }
   g.add(mesh(box(0.09,0.07,0.09,0.02),M.ceramic,0.2,0.415,-0.16));
   g.position.set(1.0,0,0.85);
-  pick(g,'圆形玻璃茶几','家具 / FURNITURE','透明玻璃圆台面 + 深色实木墩座，弱化体量感、保持视线通透。', ['living']);
+  pick(g,'圆形玻璃茶几','家具 / FURNITURE','透明玻璃圆台面 + 深色实木墩座，弱化体量感、保持视线通透。', ['living'], 'table');
 })();
 
 // 10 藤编休闲椅
@@ -1028,7 +1052,7 @@ function zoneAtPoint(pt){
     g.add(slab(0.05,0.3,0.05,M.oak,sx*0.32,0.5,-0.28));
   }
   g.position.set(-2.0,0,2.15); g.rotation.y=1.95;
-  pick(g,'藤编木质休闲椅','家具 / FURNITURE','实木框架 + 天然藤编坐背，靠背整体后倾约 19°，顶栏与立柱连成一体，为中古风味的斜躺单座。', ['living']);
+  pick(g,'藤编木质休闲椅','家具 / FURNITURE','实木框架 + 天然藤编坐背，靠背整体后倾约 19°，顶栏与立柱连成一体，为中古风味的斜躺单座。', ['living'], 'chair-cane');
 })();
 
 // 11 落地灯（立于抬高地台之上；双击开/关灯）
@@ -1043,9 +1067,12 @@ function zoneAtPoint(pt){
   g.add(role(mesh(new THREE.CylinderGeometry(0.27,0.27,0.008,26),M.emit,0,1.412,0),'emit'));
   const lampLight=new THREE.PointLight(0xffd9a8,0,6,2); lampLight.position.set(0,1.5,0); g.add(lampLight);
   LAMP = g;
+  g.userData.partId = regPart('lamp', { item:'floor-lamp', kind:'switch',
+    get:()=>lampOn, set:v=>{ lampOn=!!v; applyLamp(); return lampOn; }, label:v=>v?'开灯':'关灯' });
   g.position.set(3.62,0.40,-2.05);        // 地台台面 y=0.40，与木平台持平
   g.userData.toggle='lamp';
-  pick(g,'布艺落地灯','灯具 / LIGHTING','亚麻灯罩向上洗光，形成柔和的间接照明，夜间作为主氛围光。双击可开关。', ['deck']);
+
+  pick(g,'布艺落地灯','灯具 / LIGHTING','亚麻灯罩向上洗光，形成柔和的间接照明，夜间作为主氛围光。双击可开关。', ['deck'], 'floor-lamp');
 })();
 
 // 12 壁挂电视（双击屏幕开/关机）
@@ -1060,7 +1087,9 @@ function zoneAtPoint(pt){
   g.userData.toggle='tv';
   g.userData.screenMesh = sc;
   TV = g;
-  pick(g,'大尺寸壁挂电视','设备 / EQUIPMENT','75 英寸超薄壁挂屏，黑屏时作为墙面的深色留白。双击屏幕可开/关机。', ['tv']);
+  g.userData.partId = regPart('tv', { item:'tv', kind:'switch',
+    get:()=>tvOn, set:v=>{ tvOn=!!v; applyTv(); return tvOn; }, label:v=>v?'开机':'关机' });
+  pick(g,'大尺寸壁挂电视','设备 / EQUIPMENT','75 英寸超薄壁挂屏，黑屏时作为墙面的深色留白。双击屏幕可开/关机。', ['tv'], 'tv');
 })();
 
 // 13 混凝土壁炉台
@@ -1070,7 +1099,7 @@ function zoneAtPoint(pt){
   g.add(slab(0.62,0.1,2.4,M.conc,-3.6,0.47,1.25));
   const slot=slab(0.5,0.16,1.5,M.dark,-3.66,0.3,1.25); g.add(slot);
   g.add(slab(0.34,0.06,2.9,M.conc,-3.84,0.03,1.25));
-  pick(g,'微水泥地台 / 壁炉','硬装 / HARDSCAPE','灰色微水泥低台沿电视墙延展，内嵌线性电子壁炉位。', ['tv']);
+  pick(g,'微水泥地台 / 壁炉','硬装 / HARDSCAPE','灰色微水泥低台沿电视墙延展，内嵌线性电子壁炉位。', ['tv'], 'fireplace');
 })();
 
 // 14 天花射灯
@@ -1083,7 +1112,7 @@ function zoneAtPoint(pt){
     g.add(mesh(new THREE.TorusGeometry(0.062,0.01,6,18),M.metal,x,H-0.03,z));
     g.children[g.children.length-1].rotation.x=Math.PI/2;
   }
-  pick(g,'嵌入式射灯','灯具 / LIGHTING','无边框嵌入射灯，点状布光，弱化天花的存在感。', ['living','deck','tv']);
+  pick(g,'嵌入式射灯','灯具 / LIGHTING','无边框嵌入射灯，点状布光，弱化天花的存在感。', ['living','deck','tv'], 'spotlights');
   roofGroup.add(g);   // 随屋顶一起隐藏
 })();
 
@@ -1095,7 +1124,7 @@ function zoneAtPoint(pt){
   g.add(mesh(box(0.2,0.03,0.15,0.01),M.paper,0.02,0.465,0));
   g.position.set(3.15,0,3.05);
   g.add(contact(0,0,0.8,0.8));
-  pick(g,'实木边几','家具 / FURNITURE','小圆边几，紧贴沙发，随手放书与杯具。', ['living']);
+  pick(g,'实木边几','家具 / FURNITURE','小圆边几，紧贴沙发，随手放书与杯具。', ['living'], 'side-table');
 })();
 
 /* ---------- 16 浴室卫生间（侧翼东段，门洞 x 1.90..2.80） ---------- */
@@ -1132,12 +1161,11 @@ let BATHROOM=null;
   // 阀体上的指示柄：开关时明显转动（绕自身轴旋转是看不见的）
   const vInd=mesh(new THREE.BoxGeometry(0.014,0.012,0.075,1,1,1),M.dark,0,0.03,0);
   valve.add(vInd);
-  g.add(act(valve, ()=>{
-    const on=!showerWater.visible;
-    showerWater.visible=on; face.material.emissiveIntensity = on?0.85:0;
-    tween(valve.rotation,'y', on? 1.15 : 0, .3);
-    return on?'花洒放水':'花洒关水';
-  }));
+  g.add(toggleAct(valve, regPart('shower', { item:'bath', kind:'switch',
+    get:()=>showerWater.visible,
+    set:v=>{ showerWater.visible=!!v; face.material.emissiveIntensity = v?0.85:0;
+             tween(valve.rotation,'y', v?1.15:0, .3); return showerWater.visible; },
+    label:v=>v?'花洒放水':'花洒关水' })));
   // 壁龛置物
   g.add(slab(0.30,0.02,0.16,M.stone,hx-0.02,1.42,hz-0.02));
   /* 台盆柜：西墙 */
@@ -1158,12 +1186,11 @@ let BATHROOM=null;
   g.add(tapWater);
   // 龙头把手（沿 z 伸出的拨杆）：绕 x 轴上抬，点击开关水
   const handle=mesh(new THREE.BoxGeometry(0.035,0.02,0.13,1,1,1),M.chrome,vx,0.925,vz-0.245);
-  g.add(act(handle, ()=>{
-    const on=!tapWater.visible;
-    tapWater.visible=on; surf.visible=on;
-    tween(handle.rotation,'x', on? 0.7 : 0, .25);
-    return on?'龙头放水':'龙头关水';
-  }));
+  g.add(toggleAct(handle, regPart('tap', { item:'bath', kind:'switch',
+    get:()=>tapWater.visible,
+    set:v=>{ tapWater.visible=!!v; surf.visible=!!v;
+             tween(handle.rotation,'x', v?0.7:0, .25); return tapWater.visible; },
+    label:v=>v?'龙头放水':'龙头关水' })));
   const mir=new THREE.Mesh(new THREE.PlaneGeometry(0.92,0.86), M.mirror);
   mir.position.set(X0-0.27,1.48,vz); mir.rotation.y=Math.PI/2; g.add(mir);
   g.add(slab(0.03,0.02,0.96,M.metal,X0-0.26,1.94,vz));
@@ -1180,17 +1207,18 @@ let BATHROOM=null;
   const HINGE=Z1-0.18;                                                 // 铰链位于盖板后沿
   const lid=new THREE.Group(); lid.position.set(tx,0.655,HINGE); g.add(lid);
   const lidMesh=slab(0.42,0.022,0.44,M.black,0,0,-0.22);
-  lid.add(act(lidMesh, ()=>{
-    const up = lid.rotation.x > 0.6;
-    tween(lid.rotation,'x', up? 0 : 1.25, .4);   // 绕后沿铰链向上翻起
-    return up?'盖上马桶盖':'掀起马桶盖';
-  }));
+  let lidUp=false;
+  lid.add(toggleAct(lidMesh, regPart('toilet-lid', { item:'bath', kind:'switch',
+    get:()=>lidUp,
+    set:v=>{ lidUp=!!v; tween(lid.rotation,'x', v?1.25:0, .4);   // 绕后沿铰链向上翻起
+             return lidUp; },
+    label:v=>v?'掀起马桶盖':'盖上马桶盖' })));
   const flush=slab(0.18,0.02,0.12,M.chrome,tx,0.70,Z1-0.16);            // 冲水面板
-  g.add(act(flush, ()=>{
-    tween(flush.position,'y', 0.688, .12);
-    setTimeout(()=>tween(flush.position,'y', 0.70, .18), 140);
-    return '冲水';
-  }));
+  g.add(toggleAct(flush, regPart('flush', { item:'bath', kind:'pulse',
+    get:()=>false,
+    set:()=>{ tween(flush.position,'y', 0.688, .12);
+              setTimeout(()=>tween(flush.position,'y', 0.70, .18), 140); return true; },
+    label:()=>'冲水' })));
   /* 五金 */
   const tb=mesh(new THREE.CylinderGeometry(0.016,0.016,0.62,10),M.chrome,X1-0.06,1.30,4.30);
   tb.rotation.x=Math.PI/2; g.add(tb);
@@ -1202,7 +1230,7 @@ let BATHROOM=null;
   mat.castShadow=false; g.add(mat);
   const bl=new THREE.Mesh(new THREE.CylinderGeometry(0.10,0.10,0.02,18),M.emit);
   bl.position.set(2.60,H-0.02,5.00); g.add(role(bl,'emit'));
-  pick(g,'浴室卫生间','功能空间 / WET ROOM','磨砂玻璃湿区 + 石材挡水基座；橡木浴室柜配大理石台面与台上盆，壁挂马桶便于清洁。可点击：马桶盖翻起、冲水面板、龙头把手放水、花洒阀开关。', ['bath']);
+  pick(g,'浴室卫生间','功能空间 / WET ROOM','磨砂玻璃湿区 + 石材挡水基座；橡木浴室柜配大理石台面与台上盆，壁挂马桶便于清洁。可点击：马桶盖翻起、冲水面板、龙头把手放水、花洒阀开关。', ['bath'], 'bath');
   BATHROOM = g;
 })();
 
@@ -1264,7 +1292,7 @@ let CLOSET=null;
   const cl=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.09,0.02,18),M.emit);
   cl.position.set(0.5,H-0.02,5.05); g.add(role(cl,'emit'));
   g.add(contact(X1-0.28,4.92,0.8,1.4,0.012));
-  pick(g,'步入式衣帽间','功能空间 / WALK-IN','橡木开放格架 + 金属挂杆，被褥格、布艺抽屉柜与换鞋长凳分区明确，动线直通主厅。', ['closet']);
+  pick(g,'步入式衣帽间','功能空间 / WALK-IN','橡木开放格架 + 金属挂杆，被褥格、布艺抽屉柜与换鞋长凳分区明确，动线直通主厅。', ['closet'], 'closet');
   CLOSET = g;
 })();
 
@@ -1321,9 +1349,22 @@ function select(root, fromList){
   document.getElementById('cardD').textContent = i.desc;
   card.classList.add('show'); dot.classList.add('show');
   document.getElementById('tip').style.opacity = 0;
-  setAct(root.userData.toggle ? (root.userData.toggle==='tv' ? '双击屏幕 → 开/关机' : '双击灯罩 → 开/关灯') : '');
+  setAct(hintFor(root));
   document.querySelectorAll('.chip').forEach(c=>c.classList.toggle('on', c.dataset.n===i.name));
+  emit('select', { id:i.id, name:i.name, tag:i.tag, desc:i.desc });
 }
+// 信息卡底部提示：该家具上有哪些可点击/可双击的部件
+function hintFor(root){
+  const id = root.userData.partId;
+  if(id==='tv') return '双击屏幕 → 开/关机';
+  if(id==='lamp') return '双击灯罩 → 开/关灯';
+  const mine=[...PARTS.entries()].filter(([,p])=>p.item===root.userData.info.id).map(([k])=>k);
+  if(!mine.length) return '';
+  if(mine.every(k=>k.startsWith('book-'))) return '点击任意一本书 → 抽出细看，再点归位（共 '+mine.length+' 本）';
+  return '可点击部件：' + mine.map(k=>PART_NAME[k]||k).join(' · ');
+}
+const PART_NAME = { 'shower':'花洒开关', 'tap':'水龙头', 'toilet-lid':'马桶盖', 'flush':'冲水',
+  'lamp':'落地灯', 'tv':'电视' };
 let actTimer = null;
 function setAct(text){
   const el = document.getElementById('cardAct');
@@ -1335,13 +1376,15 @@ function flashAction(root, label){
   el.textContent = (root.userData.info.name.slice(0,6) + '：' + label);
   el.classList.add('show');
   clearTimeout(actTimer);
-  actTimer = setTimeout(()=>setAct(root.userData.toggle==='tv'?'双击屏幕 → 开/关机':'双击灯罩 → 开/关灯'), 1400);
+  actTimer = setTimeout(()=>setAct(hintFor(root)), 1400);
 }
 function deselect(){
+  const id = selected && selected.userData.info.id;
   if(selected) tint(selected,false);
   selected=null; card.classList.remove('show'); dot.classList.remove('show');
   setAct('');
   document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+  emit('deselect', { id: id||null });
 }
 function castAt(cx,cy){
   ptr.set(((cx-RLEFT)/VW)*2-1, -((cy-RTOP)/VH)*2+1);
@@ -1461,14 +1504,15 @@ if(matchMedia('(hover:hover)').matches){
 }
 
 /* ---------- 视角动画 ---------- */
-const cam = { from:new THREE.Vector3(), to:new THREE.Vector3(), tfrom:new THREE.Vector3(), tto:new THREE.Vector3(), t:1 };
-function flyTo(px,py,pz, tx,ty,tz){
+const cam = { from:new THREE.Vector3(), to:new THREE.Vector3(), tfrom:new THREE.Vector3(), tto:new THREE.Vector3(), t:1, dur:1/1.15 };
+function flyTo(px,py,pz, tx,ty,tz, dur){
   cam.from.copy(camera.position); cam.to.set(px,py,pz);
   cam.tfrom.copy(controls.target); cam.tto.set(tx,ty,tz); cam.t=0;
+  cam.dur = dur>0 ? dur : 1/1.15;
 }
 function tickCam(dt){
   if(cam.t>=1) return;
-  cam.t = Math.min(1, cam.t + dt*1.15);
+  cam.t = Math.min(1, cam.t + dt/cam.dur);
   const k = cam.t<.5 ? 4*cam.t**3 : 1-Math.pow(-2*cam.t+2,3)/2;
   camera.position.lerpVectors(cam.from,cam.to,k);
   controls.target.lerpVectors(cam.tfrom,cam.tto,k);
@@ -1579,6 +1623,7 @@ function enterRoom(z){
   bReset.textContent = '← 返回全屋';
   zoneBtns.forEach((b,id)=>b.classList.toggle('on', id===z.id));
   inFit = false;
+  emit('room', { zone:z.id, name:z.name });
 }
 function goOverview(){
   mode = 'overview';
@@ -1598,6 +1643,7 @@ function goOverview(){
   bReset.textContent = '复位';
   zoneBtns.forEach(b=>b.classList.remove('on'));
   inFit = true;
+  emit('room', { zone:null, name:'全屋俯瞰' });
 }
 
 const VIEWS = [
@@ -1633,8 +1679,9 @@ function setRole(role, hex, inten, except){
     }
   });
 }
-bDay.onclick=()=>{
-  night=!night; bDay.textContent=night?'夜灯':'日光'; bDay.classList.toggle('on',night);
+function setNight(on){
+  night = !!on;
+  bDay.textContent = night?'夜灯':'日光'; bDay.classList.toggle('on',night);
   hemi.intensity = night?0.16:1.0; amb.intensity = night?0.05:0.2;
   sun.intensity = night?0.05:2.3; fill.intensity = night?0.06:0.75;
   fill2.intensity = night?0.03:0.3; bounce.intensity = night?0.1:0.3;
@@ -1646,10 +1693,104 @@ bDay.onclick=()=>{
   scene.fog.color.copy(scene.background);
   sky.material.color.set(night?0x242a31:0xffffff);
   if(selected) tint(selected,true);
-};
+  emit('night', { night });
+}
+bDay.onclick=()=>setNight(!night);
 document.getElementById('cardFocus').onclick=()=>{ if(selected) focusOn(selected); };
 document.getElementById('cardClose').onclick=deselect;
 
+
+/* ============================================================
+   对外 API：window.Room3D
+   所有方法均可在浏览器控制台、宿主页面或 iframe 父级中调用。
+   完整说明见同目录《互动API.md》
+   ============================================================ */
+const ITEM_BY_ID = new Map();
+for(const pk of pickables){ const id=pk.userData.info.id; if(id) ITEM_BY_ID.set(id, pk); }
+const ZONE_BY_ID = new Map(ZONES.map(z=>[z.id, z]));
+function itemRoot(ref){
+  if(!ref) return null;
+  if(typeof ref==='string') return ITEM_BY_ID.get(ref)||null;
+  if(ref.isObject3D) return ITEM_BY_ID.get(ref.userData?.info?.id)||ref;
+  if(ref.root && ref.root.userData?.info) return ref.root;      // 传回 info
+  return null;
+}
+function partIdsOf(item){
+  return [...PARTS.entries()].filter(([,p])=>!item||p.item===item).map(([k])=>k);
+}
+function bookAt(ref){
+  if(typeof ref==='number') return BOOKS[ref] || null;
+  if(typeof ref==='string'){
+    if(ref.startsWith('book-')) return BOOKS.find(b=>b.id===ref)||null;
+    return BOOKS.find(b=>b.title===ref)||null;                  // 按书名
+  }
+  return null;
+}
+const Room3D = {
+  version: '1.0.0',
+  /* ---- 场景信息 ---- */
+  listItems(){ return [...ITEM_BY_ID.keys()]; },
+  getItem(ref){ const r=itemRoot(ref); return r? {...r.userData.info, root:undefined} : null; },
+  getMesh(ref){ return itemRoot(ref); },
+  /* ---- 部件（灯/电视/马桶盖/龙头/花洒/冲水/书…） ---- */
+  listParts(item){ return partIdsOf(item); },
+  getPart(id){ const p=PARTS.get(id); return p? { id, item:p.item, kind:p.kind, value:p.get() } : null; },
+  setPart(id, value){ return runPart(id, value); },        // value 省略 = 取反
+  isPartOn(id){ const p=PARTS.get(id); return p? !!p.get() : null; },
+  /* ---- 书架：逐本书 ---- */
+  books(){ return BOOKS.map(b=>({ id:b.id, index:b.index, title:b.title, open:b.mesh.userData.open })); },
+  book(ref){ const b=bookAt(ref); return b? { id:b.id, index:b.index, title:b.title, open:b.mesh.userData.open } : null; },
+  openBook(ref, open=true){ const b=bookAt(ref); return b? runPart(b.id, open) : null; },
+  closeBook(ref){ const b=bookAt(ref); return b? runPart(b.id, false) : null; },
+  toggleBook(ref){ const b=bookAt(ref); return b? runPart(b.id) : null; },
+  closeAllBooks(){ let n=0; for(const b of BOOKS) if(b.mesh.userData.open){ runPart(b.id,false); n++; } return n; },
+  openRandomBook(n=1){
+    const closed=BOOKS.filter(b=>!b.mesh.userData.open);
+    let k=0;
+    for(let i=0;i<n && closed.length;i++){
+      const [b]=closed.splice(Math.floor(Math.random()*closed.length),1);
+      if(runPart(b.id,true)!==null) k++;
+    }
+    return k;
+  },
+  /* ---- 相机 / 空间导航 ---- */
+  enterRoom(zoneId){ const z=ZONE_BY_ID.get(zoneId); if(z){ enterRoom(z); return true; } return false; },
+  listZones(){ return ZONES.map(z=>({ id:z.id, name:z.name, doll:!!z.doll })); },
+  goOverview(){ goOverview(); },
+  getZone(){ return currentZone; },
+  focus(ref){ const r=itemRoot(ref); if(!r) return false; select(r); focusOn(r); return true; },
+  flyTo(pos, target, dur=1.2){
+    const P=Array.isArray(pos)? new THREE.Vector3(...pos) : pos.clone();
+    const T=Array.isArray(target)? new THREE.Vector3(...target) : target.clone();
+    flyTo(P.x,P.y,P.z, T.x,T.y,T.z, dur); return true;
+  },
+  screenToRoom(x, y){ const i=castAt(x,y); return i? { id:i.id, name:i.name, tag:i.tag } : null; },
+  /* ---- 选中态 ---- */
+  select(ref){ const r=itemRoot(ref); if(!r) return false; if(selected===r) return true; select(r); return true; },
+  deselect(){ deselect(); },
+  getSelected(){ return selected? selected.userData.info.id : null; },
+  /* ---- 灯光 / 氛围 ---- */
+  setNight(on){ setNight(on); return night; },
+  toggleNight(){ setNight(!night); return night; },
+  isNight(){ return night; },
+  setAutoRotate(on){ controls.autoRotate = on===undefined? !controls.autoRotate : !!on;
+                     bSpin.classList.toggle('on', controls.autoRotate); return controls.autoRotate; },
+  setExposure(v){ renderer.toneMappingExposure = v; return renderer.toneMappingExposure; },
+  /* ---- 屋顶 / 分区 ---- */
+  setRoof(on){ roofGroup.visible=!!on; return roofGroup.visible; },
+  setZoneOverlay(on){ showZones(!!on); for(const q of ZONES) if(q.group.visible) return true; return false; },
+  /* ---- 事件 ---- */
+  on(ev, fn){ (_listeners.get(ev) || _listeners.set(ev,[]).get(ev)).push(fn); return ()=>Room3D.off(ev,fn); },
+  off(ev, fn){ const l=_listeners.get(ev); if(l){ const i=l.indexOf(fn); if(i>=0) l.splice(i,1); } },
+  emit,
+  /* ---- 底层对象（需要自定义扩展时用） ---- */
+  THREE, scene, camera, renderer, controls,
+};
+window.Room3D = Room3D;
+try{ document.dispatchEvent(new CustomEvent('room3d:ready', { detail: Room3D })); }
+catch(e){ document.dispatchEvent({ type:'room3d:ready', detail:Room3D }); }
+window.dispatchEvent && window.__room3dReady !== false && (window.__room3dReady = true);
+/* ============================================================ */
 
 /* ---------- 循环 ---------- */
 let last=performance.now();
